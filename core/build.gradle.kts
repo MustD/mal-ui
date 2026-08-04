@@ -4,6 +4,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.androidMultiplatformLibrary)
+    alias(libs.plugins.kotlinSerialization)
 }
 
 kotlin {
@@ -36,10 +37,27 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            // put your Multiplatform dependencies here
+            api(libs.kotlinx.coroutinesCore)
+            api(libs.kotlinx.serializationJson)
+            api(libs.ktor.clientCore)
+            implementation(libs.ktor.clientContentNegotiation)
+            implementation(libs.ktor.serializationJson)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+            implementation(libs.kotlinx.coroutinesTest)
+            implementation(libs.ktor.clientMock)
+        }
+        // A Ktor engine must be on each target's runtime classpath for the
+        // engine-less `HttpClient { }` factory in commonMain to resolve one.
+        androidMain.dependencies {
+            implementation(libs.ktor.clientOkhttp)
+        }
+        jvmMain.dependencies {
+            implementation(libs.ktor.clientCio)
+        }
+        webMain.dependencies {
+            implementation(libs.ktor.clientJs)
         }
     }
 }
