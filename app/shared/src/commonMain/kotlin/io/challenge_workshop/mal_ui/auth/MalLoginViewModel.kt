@@ -12,6 +12,7 @@ import io.challenge_workshop.mal_ui.mal.MalAuthRequest
 import io.challenge_workshop.mal_ui.mal.MalTokens
 import io.challenge_workshop.mal_ui.mal.MalUser
 import io.challenge_workshop.mal_ui.mal.createMalHttpClient
+import io.challenge_workshop.mal_ui.mal.platformMalEndpoints
 import kotlinx.coroutines.launch
 
 /**
@@ -50,6 +51,12 @@ class MalLoginViewModel : ViewModel() {
 
     val canStart: Boolean get() = clientId.isNotBlank() && !busy
     val canComplete: Boolean get() = authRequest != null && pastedRedirect.isNotBlank() && !busy
+
+    /** Effective endpoints, shown in the UI because a misrouted web build is otherwise silent. */
+    val endpoints = platformMalEndpoints()
+
+    /** True on web, where requests go via `:server` instead of straight to MAL. */
+    val usesRelay: Boolean = !endpoints.tokenEndpoint.startsWith("https://myanimelist.net")
 
     private val http = createMalHttpClient()
 
@@ -141,14 +148,26 @@ class MalLoginViewModel : ViewModel() {
             try {
                 block()
             } catch (e: MalAuthException) {
-                error = e.message
+                error = e.message?.let(::withRelayHint)
             } catch (e: Exception) {
-                error = e.message ?: e.toString()
+                error = withRelayHint(e.message ?: e.toString())
             } finally {
                 busy = false
             }
         }
     }
+
+    /**
+     * On web a dead relay surfaces as a bare "Fail to fetch" with no status, because the
+     * browser blocks the request before it is sent. Name the likely cause instead.
+     */
+    private fun withRelayHint(message: String): String =
+        if (usesRelay && ("fetch" in message.lowercase() || "could not reach" in message.lowercase())) {
+            "$message\n\nThe web target routes MAL calls through ${endpoints.tokenEndpoint} " +
+                    "because MAL sends no CORS headers. Start the relay with `./gradlew :server:run`."
+        } else {
+            message
+        }
 
     override fun onCleared() {
         http.close()

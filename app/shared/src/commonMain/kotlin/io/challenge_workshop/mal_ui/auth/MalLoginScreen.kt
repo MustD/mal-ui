@@ -133,6 +133,14 @@ private fun CredentialsSection(viewModel: MalLoginViewModel) {
             modifier = Modifier.fillMaxWidth(),
             supportingText = { Text("Must exactly match a URL registered on the MAL app") },
         )
+        if (viewModel.usesRelay) {
+            Text(
+                "This build routes token and API calls through ${viewModel.endpoints.tokenEndpoint} " +
+                        "because MAL sends no CORS headers to browsers. Run `./gradlew :server:run` first.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

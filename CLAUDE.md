@@ -14,10 +14,34 @@ Build / run:
 ./gradlew :app:androidApp:assembleDebug              # Android APK
 ./gradlew :app:desktopApp:run                        # Desktop
 ./gradlew :app:desktopApp:hotRun --auto              # Desktop with Compose Hot Reload
-./gradlew :server:run                                # Ktor server on :8080
-./gradlew :app:webApp:wasmJsBrowserDevelopmentRun    # Web, Wasm target
-./gradlew :app:webApp:jsBrowserDevelopmentRun        # Web, JS target
+./gradlew :server:run                                            # Ktor server on :18010
+./gradlew :app:webApp:wasmJsBrowserDevelopmentRun --continuous   # Web, Wasm target, on :18020
+./gradlew :app:webApp:jsBrowserDevelopmentRun --continuous       # Web, JS target, on :18030
 ```
+
+`--continuous` is required for the web targets, not just for hot reload: the run task starts webpack-dev-server without
+blocking, so without it Gradle finishes (`BUILD SUCCESSFUL` in well under a second) and takes the dev server down with
+it, leaving nothing on the port.
+
+The web targets need `:server` running as well — see [MAL authentication](#mal-authentication).
+
+### Ports
+
+This project owns the **18010–18090** block. Ports are assigned in decade slots; 18040 onwards is unallocated.
+
+| Port  | Service                                    |
+|-------|--------------------------------------------|
+| 18010 | `:server` — Ktor, MAL relay, loopback only |
+| 18020 | `:app:webApp` dev server, wasmJs target    |
+| 18030 | `:app:webApp` dev server, js target        |
+
+The two web targets have separate ports so both can run at once. Ports are set per target in
+`app/webApp/build.gradle.kts`; everything shared by both (host binding, `allowedHosts`, the `/mal` proxy) is in
+`app/webApp/webpack.config.d/devserver.js`.
+
+Optionally reachable as `https://mal-ui.localhost` (wasmJs) and `https://js.mal-ui.localhost`
+(js) through a local reverse proxy that routes `/mal` to 18010 and everything else to the dev server. Same-origin
+routing is required, not cosmetic — see below.
 
 Tests — there is no single aggregate target that covers everything; each platform has its own task:
 
@@ -36,6 +60,46 @@ Single test (works for JVM-hosted test tasks):
 ./gradlew :app:shared:jvmTest --tests "io.challenge_workshop.mal_ui.SharedLogicDesktopTest"
 ./gradlew :app:shared:jvmTest --tests "*.SharedCommonTest.example"
 ```
+
+`:core` has the same per-target split; `./gradlew :core:allTests` covers all four at once.
+
+## MAL authentication
+
+MAL supports **only** the OAuth2 authorization code grant with PKCE. There is no password grant — `grant_type=password`
+returns `unsupported_grant_type`, and the legacy basic-auth
+`/api/account/verify_credentials.xml` endpoint is retired (403). A username/password form therefore cannot work; the
+password is only ever typed on myanimelist.net.
+
+MAL supports `code_challenge_method=plain` only, so the PKCE challenge equals the verifier and no SHA-256 is involved
+(`Pkce` in `:core`).
+
+Register the app at myanimelist.net/apiconfig with **App Type `other`** — that issues a Client ID and no secret, which
+is correct for a public client.
+
+The login screen (`:app:shared`, `auth/`) uses a paste-the-code flow: it opens MAL in a browser, the user approves, and
+pastes the resulting redirect URL back in. Credentials are entered at runtime so no real Client ID is committed.
+
+**Web needs the relay, on the same origin.** MAL sends no CORS headers on its token or API endpoints and answers
+preflight `OPTIONS` with 405, so a browser cannot call them at all.
+`:server` relays them (`MalRelay.kt`) under the `/mal` prefix, and `:core`'s
+`expect fun platformMalEndpoints()` routes the browser targets there while jvm/android call MAL directly.
+
+The browser actuals derive the relay URL from `window.location.origin`, so the same build works behind the reverse proxy
+and on a direct dev-server port. Both paths keep the relay same-origin — the reverse proxy routes `/mal`, and the
+webpack dev server proxies it — which is what makes CORS a non-issue rather than something to work around. Moving the
+relay to its own hostname would reintroduce the original failure.
+
+Web therefore needs two processes:
+
+```bash
+./gradlew :server:run                                            # relay on :18010
+./gradlew :app:webApp:wasmJsBrowserDevelopmentRun --continuous   # app on :18020
+```
+
+Three things must agree on the `/mal` prefix: `MAL_RELAY_PATH_PREFIX` in `:core`, the reverse-proxy route, and the
+dev-server proxy in `webpack.config.d/devserver.js`.
+
+Details and the full diagnosis are in `docs/errors.md`.
 
 ## Architecture
 

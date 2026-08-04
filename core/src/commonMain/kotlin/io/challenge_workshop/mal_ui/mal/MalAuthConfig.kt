@@ -21,10 +21,11 @@ data class MalAuthConfig(
      * MAL falls back to the single registered URL.
      */
     val redirectUri: String? = null,
+    /** Always MAL itself: this is a browser navigation, so CORS never applies. */
     val authorizeEndpoint: String = DEFAULT_AUTHORIZE_ENDPOINT,
-    /** Override to route through a proxy — browsers cannot call MAL's token endpoint directly (no CORS). */
-    val tokenEndpoint: String = DEFAULT_TOKEN_ENDPOINT,
-    val apiBaseUrl: String = DEFAULT_API_BASE_URL,
+    /** MAL directly on native targets, the `:server` relay on web. See [platformMalEndpoints]. */
+    val tokenEndpoint: String = platformMalEndpoints().tokenEndpoint,
+    val apiBaseUrl: String = platformMalEndpoints().apiBaseUrl,
 ) {
     companion object {
         const val DEFAULT_AUTHORIZE_ENDPOINT: String = "https://myanimelist.net/v1/oauth2/authorize"
