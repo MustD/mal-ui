@@ -19,3 +19,6 @@ captures
 node_modules/
 
 .env
+
+# Local issue tracker — see docs/agents/issue-tracker.md
+.scratch/
