@@ -76,6 +76,17 @@ kotlin {
             implementation(libs.kotlin.testJunit)
             implementation(libs.robolectric)
         }
+        // The Compose UI tests run on this target only. The routing they exercise is common code
+        // with no expect/actual in it, and the other three targets would each need a second test
+        // harness — Robolectric, karma — to prove the same thing.
+        jvmTest.dependencies {
+            implementation(libs.compose.uiTest)
+            // Skiko's host-native binaries. Without them a UI test has nothing to draw on.
+            implementation(compose.desktop.currentOs)
+            // `SessionState::class.sealedSubclasses`, so the test's own coverage is checked against
+            // the sealed interface rather than against a list someone has to remember to update.
+            implementation(libs.kotlin.reflect)
+        }
         jsMain.dependencies {
             implementation(libs.wrappers.browser)
         }

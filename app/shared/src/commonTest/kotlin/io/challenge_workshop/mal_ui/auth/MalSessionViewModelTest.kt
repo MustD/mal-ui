@@ -5,8 +5,8 @@ package io.challenge_workshop.mal_ui.auth
 import io.challenge_workshop.mal_ui.mal.MalAuthConfig
 import io.challenge_workshop.mal_ui.mal.MalTokens
 import io.challenge_workshop.mal_ui.mal.MalUser
+import io.challenge_workshop.mal_ui.session.FakeKeyValueStore
 import io.challenge_workshop.mal_ui.session.JsonTokenStore
-import io.challenge_workshop.mal_ui.session.KeyValueStore
 import io.challenge_workshop.mal_ui.session.MalSessionRepository
 import io.challenge_workshop.mal_ui.session.SessionState
 import kotlinx.coroutines.Dispatchers
@@ -31,18 +31,6 @@ private const val VERIFIER = "a-very-secret-code-verifier"
  */
 class MalSessionViewModelTest {
 
-    private class MemoryStore : KeyValueStore {
-        private val entries = mutableMapOf<String, String>()
-        override suspend fun read(key: String) = entries[key]
-        override suspend fun write(key: String, value: String) {
-            entries[key] = value
-        }
-
-        override suspend fun remove(key: String) {
-            entries.remove(key)
-        }
-    }
-
     private lateinit var store: JsonTokenStore
     private lateinit var repository: MalSessionRepository
 
@@ -50,7 +38,7 @@ class MalSessionViewModelTest {
     fun setUp() {
         // viewModelScope runs on Dispatchers.Main, which no test platform provides by default.
         Dispatchers.setMain(UnconfinedTestDispatcher())
-        store = JsonTokenStore(MemoryStore())
+        store = JsonTokenStore(FakeKeyValueStore())
         repository = MalSessionRepository(store, initialConfig = MalAuthConfig(clientId = "prefilled"))
     }
 
