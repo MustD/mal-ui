@@ -45,6 +45,7 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.compose.uiTooling)
+            implementation(libs.koin.android)
         }
         commonMain.dependencies {
             api(project(":core"))
@@ -56,9 +57,24 @@ kotlin {
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.androidx.lifecycle.viewmodelCompose)
             implementation(libs.androidx.lifecycle.runtimeCompose)
+            // `api` because the app modules call `initKoin()` and Koin's own APIs from
+            // their entry points; `implementation` would hide `Module` from them.
+            api(libs.koin.core)
+            implementation(libs.koin.compose)
+            implementation(libs.koin.composeViewmodel)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+            implementation(libs.kotlinx.coroutinesTest)
+            implementation(libs.ktor.clientMock)
+            implementation(libs.koin.test)
+        }
+        // Robolectric so `AndroidKeyValueStore` is exercised against a real `SharedPreferences`
+        // on the host. `withHostTest { isIncludeAndroidResources = true }` above is what makes
+        // it work; the alternative was a device test, which needs an emulator to mean anything.
+        getByName("androidHostTest").dependencies {
+            implementation(libs.kotlin.testJunit)
+            implementation(libs.robolectric)
         }
         jsMain.dependencies {
             implementation(libs.wrappers.browser)

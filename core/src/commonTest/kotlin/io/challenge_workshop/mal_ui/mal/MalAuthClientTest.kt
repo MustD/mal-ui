@@ -138,24 +138,24 @@ class MalAuthClientTest {
     }
 
     @Test
-    fun completeAuthorizationRejectsMismatchedState() = runTest {
-        val request = MalAuthRequest("https://example.test", codeVerifier = "v", state = "expected")
-        val error = assertFailsWith<MalAuthException> {
-            clientOf(Recorder()).completeAuthorization(request, "http://localhost/cb?code=c&state=forged")
-        }
-        assertTrue(error.message!!.contains("state"), error.message!!)
+    fun authorizationForIsDeterministicGivenAVerifierAndState() = runTest {
+        // What lets a Pending Authorization that outlived the process have its URL rebuilt. Two
+        // builders would drift, and MAL matches redirect_uri byte-exactly.
+        val client = clientOf(Recorder())
+
+        val first = client.authorizationFor("the-verifier", "the-state")
+        val second = client.authorizationFor("the-verifier", "the-state")
+
+        assertEquals(first.authorizationUrl, second.authorizationUrl)
+        assertEquals("the-verifier", first.codeVerifier)
+        assertEquals("the-state", first.state)
     }
 
     @Test
-    fun completeAuthorizationAcceptsMatchingState() = runTest {
-        val recorder = Recorder()
-        val request = MalAuthRequest("https://example.test", codeVerifier = "v1", state = "s1")
-        val tokens = clientOf(recorder)
-            .completeAuthorization(request, "http://localhost/cb?code=c1&state=s1")
+    fun beginAuthorizationMintsAFreshVerifierEveryTime() = runTest {
+        val client = clientOf(Recorder())
 
-        assertEquals("at-123", tokens.accessToken)
-        assertEquals("c1", recorder.formParams()["code"])
-        assertEquals("v1", recorder.formParams()["code_verifier"])
+        assertTrue(client.beginAuthorization().codeVerifier != client.beginAuthorization().codeVerifier)
     }
 
     @Test
@@ -180,6 +180,9 @@ class MalAuthClientTest {
         assertEquals("invalid_client", error.errorCode)
         assertTrue(error.message!!.contains("Client authentication failed"), error.message!!)
         assertTrue(error.message!!.contains("Client Secret"), "should hint at the web-App-Type trap")
+        // MAL reports a Redirect URI mismatch as this same 401, which points at the Client ID and
+        // costs an hour of debugging. The hint has to name both possibilities.
+        assertTrue(error.message!!.contains("redirect_uri"), "should hint at a Redirect URI mismatch")
     }
 
     @Test

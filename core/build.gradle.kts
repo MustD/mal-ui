@@ -40,6 +40,7 @@ kotlin {
             api(libs.kotlinx.coroutinesCore)
             api(libs.kotlinx.serializationJson)
             api(libs.ktor.clientCore)
+            implementation(libs.ktor.clientAuth)
             implementation(libs.ktor.clientContentNegotiation)
             implementation(libs.ktor.serializationJson)
         }

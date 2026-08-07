@@ -1,6 +1,7 @@
 package io.challenge_workshop.mal_ui.mal
 
 import io.ktor.client.HttpClient
+import io.ktor.client.HttpClientConfig
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.forms.submitForm
@@ -16,16 +17,34 @@ import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 
 /**
- * Builds the [HttpClient] used to talk to MAL. Each target contributes an engine, so the
- * engine-less factory resolves one automatically.
+ * The client configuration every MAL-facing [HttpClient] needs, whether or not it also carries the
+ * `Auth` plugin.
  *
  * `expectSuccess` stays off deliberately: MAL puts the useful diagnostics in the body of a
  * 4xx, and we want to read it rather than have Ktor throw first.
  */
-fun createMalHttpClient(): HttpClient = HttpClient {
+fun HttpClientConfig<*>.malClientDefaults() {
     expectSuccess = false
     install(ContentNegotiation) {
         json(Json { ignoreUnknownKeys = true; isLenient = true })
+    }
+}
+
+/**
+ * Builds the [HttpClient] used to talk to MAL. Each target contributes an engine, so the
+ * engine-less factory resolves one automatically.
+ */
+fun createMalHttpClient(): HttpClient = HttpClient { malClientDefaults() }
+
+/**
+ * How to make an [HttpClient]. The one seam that lets a test drive the whole refresh path against a
+ * `MockEngine` while production picks up whichever engine its target contributes.
+ */
+fun interface HttpClientFactory {
+    fun create(configure: HttpClientConfig<*>.() -> Unit): HttpClient
+
+    companion object {
+        val Default: HttpClientFactory = HttpClientFactory { configure -> HttpClient(configure) }
     }
 }
 
@@ -46,10 +65,21 @@ class MalAuthClient(
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     /** Step 1: mint a PKCE verifier plus the URL to send the user to. */
-    fun beginAuthorization(): MalAuthRequest {
+    fun beginAuthorization(): MalAuthRequest =
+        authorizationFor(Pkce.generateCodeVerifier(), Pkce.generateState())
+
+    /**
+     * The authorization URL for a *specific* verifier and state, rather than a freshly minted pair.
+     *
+     * Exists so a Pending Authorization that was persisted before the app restarted can have its URL
+     * rebuilt — which is possible at all only because MAL supports `plain` PKCE, so the challenge *is*
+     * the verifier and there is nothing in the URL that is not in the record.
+     *
+     * The one construction site for this URL. Two would drift, and MAL matches `redirect_uri`
+     * byte-exactly.
+     */
+    fun authorizationFor(codeVerifier: String, state: String): MalAuthRequest {
         require(config.clientId.isNotBlank()) { "clientId must not be blank" }
-        val codeVerifier = Pkce.generateCodeVerifier()
-        val state = Pkce.generateState()
         val url = URLBuilder(config.authorizeEndpoint).apply {
             parameters.append("response_type", "code")
             parameters.append("client_id", config.clientId)
@@ -59,22 +89,6 @@ class MalAuthClient(
             config.redirectUri?.let { parameters.append("redirect_uri", it) }
         }.buildString()
         return MalAuthRequest(authorizationUrl = url, codeVerifier = codeVerifier, state = state)
-    }
-
-    /**
-     * Step 3, with the CSRF check wired in: parses whatever the user pasted, verifies the
-     * echoed `state` against [request], and exchanges the code.
-     */
-    suspend fun completeAuthorization(request: MalAuthRequest, pastedRedirect: String): MalTokens {
-        val parsed = parseRedirect(pastedRedirect)
-        // A bare pasted code carries no state, so there is nothing to compare against.
-        if (parsed.state != null && parsed.state != request.state) {
-            throw MalAuthException(
-                "The `state` in that URL does not match this login attempt. Start the login " +
-                        "again rather than trusting it."
-            )
-        }
-        return exchangeCode(parsed.code, request.codeVerifier)
     }
 
     /** Step 3: exchange an authorization code for tokens. */
@@ -94,11 +108,17 @@ class MalAuthClient(
             append("refresh_token", refreshToken)
         }
 
-    /** Fetches the signed-in user, which is the cheapest way to prove a token works. */
-    suspend fun me(accessToken: String): MalUser {
+    /**
+     * Fetches the signed-in user, which is the cheapest way to prove a token works.
+     *
+     * @param accessToken pass it explicitly when [http] has no `Auth` plugin; leave it null when it
+     * does, so the plugin attaches the header and owns the refresh-on-401 behaviour. Setting it here
+     * as well would send two `Authorization` headers.
+     */
+    suspend fun me(accessToken: String? = null): MalUser {
         val response = try {
             http.get("${config.apiBaseUrl.trimEnd('/')}/users/@me") {
-                header(HttpHeaders.Authorization, "Bearer $accessToken")
+                if (accessToken != null) header(HttpHeaders.Authorization, "Bearer $accessToken")
             }
         } catch (e: MalAuthException) {
             throw e
@@ -163,9 +183,16 @@ class MalAuthClient(
 
     /** MAL's error codes are terse; these are the ones that actually bite during setup. */
     private fun hintFor(errorCode: String?): String = when (errorCode) {
+        // MAL reports a *Redirect URI* mismatch as 401 invalid_client / "Client authentication
+        // failed", which implicates the Client ID and costs an hour of debugging. Naming both
+        // possibilities here is the whole point of the hint.
         "invalid_client" ->
-            "\n\nCheck the Client ID. If the app was registered with App Type `web`, MAL issued a " +
-                    "Client Secret and requires it here too."
+            "\n\nTwo possible causes. Either the Client ID is wrong — and if the app was registered " +
+                    "with App Type `web`, MAL issued a Client Secret and requires it here too. Or the " +
+                    "redirect_uri does not byte-exactly match one registered on the app: MAL reports " +
+                    "a Redirect URI mismatch as this same 401 invalid_client, which points at the " +
+                    "Client ID and not at the URI. A trailing slash, a changed port or a case " +
+                    "difference is enough."
 
         "invalid_request" ->
             "\n\nUsually a redirect_uri mismatch: it must match a URL registered on the app exactly, " +

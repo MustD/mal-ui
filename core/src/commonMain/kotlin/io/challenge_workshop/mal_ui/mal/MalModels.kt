@@ -16,7 +16,14 @@ data class MalTokens(
     @SerialName("expires_in") val expiresIn: Long,
     @SerialName("access_token") val accessToken: String,
     @SerialName("refresh_token") val refreshToken: String,
-)
+) {
+    /**
+     * Redacted, so no log line, exception message or `SessionState` dump can leak a credential
+     * by interpolating a token pair. The generated `equals`/`hashCode` are untouched, so tests
+     * still compare token values exactly.
+     */
+    override fun toString(): String = "MalTokens(tokenType=$tokenType, expiresIn=$expiresIn, tokens=REDACTED)"
+}
 
 /** Subset of `GET /users/@me`. MAL omits fields it has no value for, so all but id/name are optional. */
 @Serializable
