@@ -8,8 +8,8 @@ is *not* built yet.
 
 **Confidence is marked throughout.** `[verified]` was measured or read from source during this research; `[docs]` comes
 from an official document; `[reported]` is community evidence; `[unverified]`
-is an assumption that needs checking. Two `[unverified]` items in [§1](#1-verify-these-first) change the design, so
-start there.
+is an assumption that needs checking. The two `[unverified]` items in [§1](#1-verified-2026-08-06) that changed the
+design are now **settled by measurement** — see that section for the answers and what they closed off.
 
 ---
 
@@ -42,26 +42,37 @@ follows from tokens outliving a single screen:
 
 ---
 
-## 1. Verify these first
+## 1. Verified 2026-08-06
 
-Both are five-minute checks on a logged-in `myanimelist.net/apiconfig` session, and the design branches on them. Do not
-start coding until they are settled.
+**Both unknowns are settled, and both landed on the permissive answer.** The design branched on them, so this section
+now records answers rather than experiments.
+
+Method, and how to re-run it if MAL's behaviour changes:
+[`docs/adr/mal-redirect-uri-probes.http`](adr/mal-redirect-uri-probes.http). Registration itself needs a logged-in
+apiconfig session, but everything after it is machine-checkable, because MAL validates the client and the redirect URI
+*before* it looks at the authorization code. Posting a deliberately undecryptable code to
+`/v1/oauth2/token` therefore separates the two cases without a browser or a session:
+
+| Response to a bogus code                                              | Meaning                              |
+|-----------------------------------------------------------------------|--------------------------------------|
+| 400 `invalid_request`, hint `"Cannot decrypt the authorization code"` | the `redirect_uri` **matched**       |
+| 401 `invalid_client`, `"Client authentication failed"`                | the `redirect_uri` **did not match** |
+
+Note MAL uses `invalid_request` where RFC 6749 §5.2 asks for `invalid_grant`, and that the mismatch body is
+byte-identical to a genuinely wrong client ID — the status is the only signal `[verified]`.
 
 ### 1.1 Can one app register multiple redirect URLs?
 
-**The research disagreed with itself here, so treat it as genuinely open.**
+**Yes. Eight URIs are registered on one client ID and all eight work** `[verified]`. The research disagreed with itself
+here and this was the highest-leverage unknown; it resolves in favour of the clean design.
 
-- **For:** the `App Redirect URL` field is reported to be a *textarea* hinting *"Separate multiple URLs with line
-  breaks"* `[unverified — could not be read while logged out]`. MAL's docs say the value
-  "must exactly match **one of your pre-registered URIs**" `[docs]`, which only makes sense if several can exist.
-  DailyAL is reported to register both `http://localhost:8585/callback` and
-  `com.teen.dailyanimelist://login-callback` against one client ID `[reported]`.
-- **Against:** a 2020 thread has a user reporting *"This error appears as soon as I add more than one redirect URL —
-  bug?"* with MAL staff replying *"there's currently something wrong with the redirection"* `[reported]`. Six years
-  stale, but never confirmed fixed.
+The 2020 thread where a user reported *"This error appears as soon as I add more than one redirect URL — bug?"* and MAL
+staff replied *"there's currently something wrong with the redirection"* `[reported]` describes a bug that is either
+fixed or never applied to this path. The `App Redirect URL` field is indeed a textarea taking line-separated URLs, as
+DailyAL's two-URI registration implied `[verified]`.
 
-**If multiple are allowed** — the clean design. One client ID, one redirect per platform/origin, and
-`redirect_uri` sent explicitly on both authorize and token (byte-identical):
+So: one client ID, one redirect per platform/origin, `redirect_uri` sent explicitly on both authorize and token
+(byte-identical). The registered set, which ticket 09 hardcodes:
 
 ```
 io.challenge-workshop.malui://oauth/callback      # Android
@@ -70,35 +81,61 @@ http://localhost:18020/oauth/callback             # web, wasmJs dev server
 http://localhost:18030/oauth/callback             # web, js dev server
 https://mal-ui.localhost/oauth/callback           # web, wasmJs via reverse proxy
 https://js.mal-ui.localhost/oauth/callback        # web, js via reverse proxy
+http://localhost:18040/oauth/callback             # registered, redundant — see §1.2
+http://localhost:8080/oauth/callback              # legacy paste-the-code, kept as a control
 ```
 
-Note the consequence: once more than one URI is registered, **omitting `redirect_uri` stops being legal**, so the `null`
-branch documented on `MalAuthConfig.redirectUri` becomes unusable.
+**The consequence bites immediately, and it was measured:** with one URI registered, omitting `redirect_uri` at
+`/v1/oauth2/authorize` returned 303 → `login.php`; with eight registered the identical request returns 401
+`invalid_client` `[verified]`. The `null` branch documented on `MalAuthConfig.redirectUri` is therefore dead, which is
+what narrows it to a non-null `String` in ticket 09. A null there can now only ever be a bug, and it reports as a
+misleading 401 implicating the client ID.
 
-**If only one is allowed** — register one MAL app *per platform*, each with its own client ID and its single redirect
-URL, and omit `redirect_uri` entirely (the Aniyomi approach `[reported]`). This is the pattern the shipped MAL clients
-actually use. It means the client ID becomes per-platform config, which affects [§7](#7-client-id-configuration).
+The *token* endpoint does not enforce the same rule: with `redirect_uri` omitted it still returns the 400, because it
+validates the parameter only when present `[verified]`. Whether it enforces "the same URI as authorize, or neither"
+can only be seen with a real decryptable code, so treat MAL's documented requirement as binding and always send it.
+
+The rejected alternative — one MAL app *per platform*, each with its own client ID and single redirect URL, omitting
+`redirect_uri` entirely (the Aniyomi approach `[reported]`) — is no longer needed. That would have made the client ID
+per-platform config and complicated [§7](#7-client-id-configuration).
 
 ### 1.2 Does the registration form accept these URI forms?
 
-Test each; none is documented `[unverified]`:
+**All three, plus the plain-`localhost` and dev-server forms. Every URI tested was accepted at registration and at
+`/v1/oauth2/authorize`** `[verified]`. None of this was documented; two of the three predictions here were wrong, in the
+permissive direction.
 
-- A custom scheme — `io.challenge-workshop.malui://oauth/callback`. Strongly likely: MoeList ships
-  `moelist://…` and Aniyomi ships `aniyomi://myanimelist-auth` `[reported]`, and MAL staff explicitly recommend *"
-  register a custom URI scheme… for example `myapp://auth`"* `[reported]`.
-- A bare IP literal — `http://127.0.0.1:18040/oauth/callback`. `http://localhost:PORT/path` is well-attested in the wild
-  (Mal4J `:5050`, anilist-mal-sync `:18080`) `[reported]`; the IP-literal form is not, and some providers reject it. RFC
-  8252 §8.3 prefers the literal IP, so try it first and fall back to `localhost` if rejected.
-- A `.localhost` subdomain — `https://mal-ui.localhost/oauth/callback`. No MAL evidence either way. Google, Entra and
-  Slack are all documented to reject `.localhost` subdomains `[docs, other providers]`, so this is the most likely of
-  the three to fail. If it does, the reverse-proxy hostnames simply don't get auto-redirect and fall back to
-  paste-the-code.
+- A custom scheme — `io.challenge-workshop.malui://oauth/callback`. **Accepted**, as expected: MoeList ships
+  `moelist://…`, Aniyomi ships `aniyomi://myanimelist-auth` `[reported]`, and MAL staff explicitly recommend *"register
+  a custom URI scheme… for example `myapp://auth`"* `[reported]`.
+- A bare IP literal — `http://127.0.0.1:18040/oauth/callback`. **Accepted**, which was the doubtful one — the form is
+  unattested against MAL and some providers reject it. RFC 8252 §8.3 prefers the literal IP, so the desktop listener
+  uses it and the `localhost` fallback is unnecessary. That also sidesteps the dual-address-family trap: `localhost`
+  resolves to both `127.0.0.1` and `::1` here, which is the same thing that caused the dev-server bug in
+  [`errors.md`](errors.md), and an IP literal has no such ambiguity. `http://localhost:18040/oauth/callback` is
+  registered too but redundant.
+- A `.localhost` subdomain — `https://mal-ui.localhost/oauth/callback` and `https://js.mal-ui.localhost/oauth/callback`.
+  **Both accepted**, which is the prediction that failed: Google, Entra and Slack are all documented to reject
+  `.localhost` subdomains `[docs, other providers]`, and this was called the most likely of the three to fail. MAL does
+  not care. The reverse-proxy hostnames therefore keep auto-redirect instead of falling back to paste-the-code.
+- The dev-server origins — `http://localhost:18020/oauth/callback` and `http://localhost:18030/oauth/callback`.
+  **Accepted.**
 
 ### 1.3 Two behaviours worth knowing (do not need testing)
 
-- **Exact-match is byte-exact.** A trailing slash, an extra query parameter, or a scheme/host case change all fail
-  `[verified by probing MAL with a public open-source client ID]`. There is no RFC 3986 normalization, and therefore
-  **no RFC 8252 §7.3 loopback-port leniency** — every port must be registered explicitly. Assume no ephemeral ports.
+- **Exact-match is byte-exact, and stricter than RFC 3986.** Re-measured 2026-08-06 against a URI that *is* registered,
+  so these are rejections rather than absences `[verified]`. Every mutation returns 401 `invalid_client`:
+
+  | Mutation of a registered URI | Result |
+    |---|---|
+  | trailing slash appended | rejected |
+  | host upper-cased (`MAL-UI.localhost`) | rejected — though RFC 3986 §3.2.2 makes host case-insensitive |
+  | scheme default port made explicit (`:443` on `https`) | rejected — no port normalization at all |
+  | extra query parameter appended | rejected |
+  | different loopback port (`:54321` vs registered `:18040`) | rejected |
+
+  So MAL performs **no** RFC 3986 normalization, and therefore **no RFC 8252 §7.3 loopback-port leniency** — every port
+  must be registered explicitly, which is why the desktop port is fixed at 18040 rather than ephemeral.
 - **A redirect-URI mismatch reports as HTTP 401 `invalid_client` / "Client authentication failed"**
   `[verified]`, which misleadingly implicates the Client ID. `MalAuthClient.hintFor()` currently maps
   `invalid_client` to "check the Client ID" — worth extending to mention redirect-URI mismatch, or this will cost an
@@ -726,8 +763,10 @@ metadata]` — a blocker while this repo ships both web targets.
 
 Each phase is independently testable and leaves the app working.
 
-**Phase 0 — settle the unknowns.** Verify [§1](#1-verify-these-first) on the apiconfig form. Register the redirect URIs.
-Record the answers in this document. *Nothing else should start first.*
+**Phase 0 — settle the unknowns. Done, 2026-08-06.** [§1](#1-verified-2026-08-06) is measured, all eight redirect URIs
+are registered on one client ID, and the answers are recorded there. Ticket 09 and everything downstream of it are
+unblocked. Re-run [`docs/adr/mal-redirect-uri-probes.http`](adr/mal-redirect-uri-probes.http) if the registered set
+changes.
 
 **Phase 1 — shared foundation, no UI change.** All in `:core`, all covered by `:core:allTests`.
 `KeyValueStore` + `JsonTokenStore` + `StoredSession` + `PendingAuthorization`; `SessionState`;
@@ -767,16 +806,22 @@ documented fallback for headless desktop, blocked popups, and browsers without C
 
 Carried forward from the research; each is `[unverified]`:
 
-1. **Multiple redirect URIs per MAL app** — [§1.1](#11-can-one-app-register-multiple-redirect-urls). The
-   highest-leverage unknown; contradictory evidence.
-2. **Does apiconfig accept a custom scheme / bare IP literal / `.localhost` subdomain?** —
-   [§1.2](#12-does-the-registration-form-accept-these-uri-forms).
-3. **`androidx.browser` 1.10.0 under AGP 9 + compileSdk 36** — no reported problem, not build-tested.
-4. **Does `com.android.kotlin.multiplatform.library` support `src/androidMain/AndroidManifest.xml`?**
+1. **`androidx.browser` 1.10.0 under AGP 9 + compileSdk 36** — no reported problem, not build-tested.
+2. **Does `com.android.kotlin.multiplatform.library` support `src/androidMain/AndroidManifest.xml`?**
    Sidestepped by keeping manifest changes in `:app:androidApp`.
-5. **Real-world share of Chrome ≥137**, i.e. how often the Auth Tab fallback path actually runs.
-6. **multiplatform-settings 1.3.0 consumed from Kotlin 2.4.10** — klib compatibility should hold; not compiled. Only
+3. **Real-world share of Chrome ≥137**, i.e. how often the Auth Tab fallback path actually runs.
+4. **multiplatform-settings 1.3.0 consumed from Kotlin 2.4.10** — klib compatibility should hold; not compiled. Only
    matters if §8's recommendation is overridden.
+
+Closed 2026-08-06, both by measurement and both in the permissive direction — kept here so they are not reopened by
+accident: **multiple redirect URIs per MAL app** ([§1.1](#11-can-one-app-register-multiple-redirect-urls)) and **which
+URI forms apiconfig accepts** ([§1.2](#12-does-the-registration-form-accept-these-uri-forms)). The corollary that *did*
+change the code is that omitting `redirect_uri` is no longer legal.
+
+Still unverified but out of MAL's hands, because nothing was listening when the probes ran: that the web dev servers
+serve `/oauth/callback` under `historyApiFallback`, that the `/mal` prefix agrees across `:core`, the webpack dev server
+and the reverse proxy, and that the desktop loopback listener does not bind `0.0.0.0`. §D and §E of
+[the probe file](adr/mal-redirect-uri-probes.http) cover these; they belong to phases 3 and 4, not to phase 0.
 
 Corrections made during research, recorded so they are not re-introduced: `state` **is** already verified
 (`MalAuthClient.kt:71`); `MalAuthClient.refresh()`'s KDoc about old refresh tokens staying valid **is** correct per

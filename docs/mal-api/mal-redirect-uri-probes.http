@@ -1,0 +1,774 @@
+###############################################################################
+# MAL redirect-URI probes
+#
+# Manual companion to ticket 02 (`.scratch/mal-auth-redirect/issues/02-probe-
+# redirect-uri-forms.md`) and §1.2 of `../mal-auth-implementation.md`. Registration
+# on myanimelist.net/apiconfig still needs a browser; everything a machine *can*
+# check is here.
+#
+# Written for the JetBrains HTTP Client (IntelliJ / Fleet). `# @no-redirect`,
+# `# @no-cookie-jar` and the `> {% %}` response handlers are its syntax — the VS
+# Code REST Client will still fire the requests but ignores all three.
+#
+# Fill in `@clientId` below (a runtime value, never committed) and run the
+# sections in order.
+#
+# -----------------------------------------------------------------------------
+# URLs to test the redirect to
+# -----------------------------------------------------------------------------
+# Every URI that has to be registered on the one MAL app, in the order ticket 02
+# probes them. Record the outcome of each of the three checks; §1.2 of the
+# research doc wants the results written back into it, replacing `[unverified]`.
+#
+#   | # | Redirect URI                                  | Target                  | apiconfig | authorize | token    |
+#   |---|-----------------------------------------------|-------------------------|-----------|-----------|----------|
+#   | 1 | io.challenge-workshop.malui://oauth/callback  | Android custom scheme   | accepted  | accepted  | accepted |
+#   | 2 | http://127.0.0.1:18040/oauth/callback         | Desktop loopback, IP    | accepted  | accepted  | accepted |
+#   | 3 | http://localhost:18040/oauth/callback         | Desktop loopback, name  | accepted  | accepted  | accepted |
+#   | 4 | https://mal-ui.localhost/oauth/callback       | Web wasmJs, rev. proxy  | accepted  | accepted  | accepted |
+#   | 5 | https://js.mal-ui.localhost/oauth/callback    | Web js, rev. proxy      | accepted  | accepted  | accepted |
+#   | 6 | http://localhost:18020/oauth/callback         | Web wasmJs, dev server  | accepted  | accepted  | accepted |
+#   | 7 | http://localhost:18030/oauth/callback         | Web js, dev server      | accepted  | accepted  | accepted |
+#   | 8 | http://localhost:8080/oauth/callback          | Legacy paste-the-code   | accepted  | accepted  | accepted |
+#
+#   apiconfig — accepted by the `App Redirect URL` textarea and survives a save.
+#   authorize — §A here: MAL shows the consent page rather than an error.
+#   token     — §B here: needs no MAL session.
+#
+# SETTLED by the 2026-08-06 run, all eight registered on one app
+# (`mal-redirect-result.log`):
+#   - §1.1 — **several redirect URIs on one client ID works.** The 2020 staff
+#     report of "something wrong with the redirection" is stale. The clean design
+#     holds; the one-MAL-app-per-platform fallback is not needed.
+#   - §1.2 — every form is accepted, including the two the research doc bet
+#     against: the bare IP literal (so desktop gets the RFC 8252 §8.3-preferred
+#     form and never needs the dual-address-family `localhost` bind) and the
+#     `.localhost` subdomains, which Google, Entra and Slack all reject.
+#   - Omitting `redirect_uri` at authorize is now **illegal** — A9 went 303 → 401
+#     the moment the set grew past one. That is what makes
+#     `MalAuthConfig.redirectUri` non-null in ticket 09.
+#
+# 3 is redundant now that 2 is accepted, but it is registered and harmless. 8 is
+# the historical paste-the-code URI, kept as a control.
+#
+# Two things to expect, both now confirmed rather than inherited from §1.3:
+#   - Matching is byte-exact, and stricter than RFC 3986: MAL does not lowercase
+#     the host and does not normalize the default port. No trailing slash, no case
+#     change, no extra query parameter, no loopback port leniency. §C proves each.
+#   - A mismatch reports as HTTP 401 `invalid_client` / "Client authentication
+#     failed", which misleadingly implicates the client ID.
+#
+# `plain` PKCE means the verifier below travels in the authorization URL, so
+# treat this file's output as sensitive: don't paste a real `code` or a real
+# `access_token` into a ticket.
+###############################################################################
+
+### Variables
+
+# Client ID from myanimelist.net/apiconfig. App Type `other` → no secret.
+@clientId = xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# Leave empty unless the app was registered as App Type `web`.
+@clientSecret =
+
+# Fixed PKCE verifier and state. Under `plain`, code_challenge == code_verifier,
+# so no hashing step: 43–128 unreserved characters is the only requirement.
+@verifier = probe0verifier0probe0verifier0probe0verifier0probe
+@state = probe-state-0001
+
+# A code that is guaranteed invalid. §B relies on this: MAL validates the client
+# and the redirect URI *before* the code, so a bad code still tells you whether
+# the URI matched.
+@badCode = definitely-not-a-real-authorization-code
+
+@authorize = https://myanimelist.net/v1/oauth2/authorize
+@token = https://myanimelist.net/v1/oauth2/token
+
+# The URIs under test, same numbering as the table.
+@uri1 = io.challenge-workshop.malui://oauth/callback
+@uri2 = http://127.0.0.1:18040/oauth/callback
+@uri3 = http://localhost:18040/oauth/callback
+@uri4 = https://mal-ui.localhost/oauth/callback
+@uri5 = https://js.mal-ui.localhost/oauth/callback
+@uri6 = http://localhost:18020/oauth/callback
+@uri7 = http://localhost:18030/oauth/callback
+@uri8 = http://localhost:8080/oauth/callback
+
+# Local services. `:server` is the relay; the two dev servers must serve
+# /oauth/callback themselves; 18040 is the desktop loopback listener.
+@relay = http://localhost:18010
+@webWasm = http://localhost:18020
+@webJs = http://localhost:18030
+@proxyWasm = https://mal-ui.localhost
+@proxyJs = https://js.mal-ui.localhost
+@loopback = http://127.0.0.1:18040
+# This machine's LAN address, for the §E binding check. Find it with `ip route get 1.1.1.1`.
+@lanHost = 192.168.1.10
+
+###############################################################################
+# §A — authorize round trip, one per URI
+#
+# A form the registration page accepted can still fail here, which is why this
+# section exists separately from apiconfig.
+#
+# Run these logged out and with the cookie jar off, so the response is about the
+# request and not about your session. The two observed outcomes, from the
+# 2026-08-06 run:
+#   303 → myanimelist.net/login.php   ACCEPTED. MAL got past the client checks and
+#                                     wants a login before showing consent.
+#   401 invalid_client (JSON)         REJECTED. This URI is not registered on the
+#                                     app (or the client ID is wrong).
+# To see the actual consent screen, open the same URL in a logged-in browser; the
+# no-redirect directive keeps this file from silently following the chain.
+#
+# `redirect_uri` is sent unencoded for readability. None of the eight values
+# contains `&`, `=`, `+`, `#` or `%`, so there is nothing here that a query
+# parser can misread; add percent-encoding if you extend the list with one that
+# does.
+###############################################################################
+
+### A1 — Android custom scheme
+# @no-redirect
+# @no-cookie-jar
+GET {{authorize}}?response_type=code&client_id={{clientId}}&code_challenge={{verifier}}&code_challenge_method=plain&
+    state={{state}}&redirect_uri={{uri1}}
+
+> {%
+    client.log(`A1 status=${response.status} location=${response.headers.valueOf("Location") ?? "-"}`);
+%}
+
+### A2 — Desktop loopback, IP literal
+# @no-redirect
+# @no-cookie-jar
+GET {{authorize}}?response_type=code&client_id={{clientId}}&code_challenge={{verifier}}&code_challenge_method=plain&
+    state={{state}}&redirect_uri={{uri2}}
+
+> {%
+    client.log(`A2 status=${response.status} location=${response.headers.valueOf("Location") ?? "-"}`);
+%}
+
+### A3 — Desktop loopback, `localhost` name (only if A2 was rejected)
+# @no-redirect
+# @no-cookie-jar
+GET {{authorize}}?response_type=code&client_id={{clientId}}&code_challenge={{verifier}}&code_challenge_method=plain&
+    state={{state}}&redirect_uri={{uri3}}
+
+> {%
+    client.log(`A3 status=${response.status} location=${response.headers.valueOf("Location") ?? "-"}`);
+%}
+
+### A4 — Web wasmJs behind the reverse proxy (`.localhost` subdomain)
+# @no-redirect
+# @no-cookie-jar
+GET {{authorize}}?response_type=code&client_id={{clientId}}&code_challenge={{verifier}}&code_challenge_method=plain&
+    state={{state}}&redirect_uri={{uri4}}
+
+> {%
+    client.log(`A4 status=${response.status} location=${response.headers.valueOf("Location") ?? "-"}`);
+%}
+
+### A5 — Web js behind the reverse proxy
+# @no-redirect
+# @no-cookie-jar
+GET {{authorize}}?response_type=code&client_id={{clientId}}&code_challenge={{verifier}}&code_challenge_method=plain&
+    state={{state}}&redirect_uri={{uri5}}
+
+> {%
+    client.log(`A5 status=${response.status} location=${response.headers.valueOf("Location") ?? "-"}`);
+%}
+
+### A6 — Web wasmJs dev server on :18020
+# @no-redirect
+# @no-cookie-jar
+GET {{authorize}}?response_type=code&client_id={{clientId}}&code_challenge={{verifier}}&code_challenge_method=plain&
+    state={{state}}&redirect_uri={{uri6}}
+
+> {%
+    client.log(`A6 status=${response.status} location=${response.headers.valueOf("Location") ?? "-"}`);
+%}
+
+### A7 — Web js dev server on :18030
+# @no-redirect
+# @no-cookie-jar
+GET {{authorize}}?response_type=code&client_id={{clientId}}&code_challenge={{verifier}}&code_challenge_method=plain&
+    state={{state}}&redirect_uri={{uri7}}
+
+> {%
+    client.log(`A7 status=${response.status} location=${response.headers.valueOf("Location") ?? "-"}`);
+%}
+
+### A8 — Legacy paste-the-code URI (control: this one is already registered)
+# @no-redirect
+# @no-cookie-jar
+GET {{authorize}}?response_type=code&client_id={{clientId}}&code_challenge={{verifier}}&code_challenge_method=plain&
+    state={{state}}&redirect_uri={{uri8}}
+
+> {%
+    client.log(`A8 status=${response.status} location=${response.headers.valueOf("Location") ?? "-"}`);
+%}
+
+### A9 — No `redirect_uri` at all
+# Legal only while exactly one URI is registered. CONFIRMED: 303 with one URI
+# registered, 401 `invalid_client` with eight. This is the load-bearing check
+# behind non-null `MalAuthConfig.redirectUri` in ticket 09 — and note it is the
+# *authorize* endpoint that enforces it, not the token endpoint (see B0).
+# Re-run it if the registered set is ever cut back to one.
+# @no-redirect
+# @no-cookie-jar
+GET {{authorize}}?response_type=code&client_id={{clientId}}&code_challenge={{verifier}}&code_challenge_method=plain&
+    state={{state}}
+
+> {%
+    client.log(`A9 (no redirect_uri) status=${response.status} location=${response.headers.valueOf("Location") ?? "-"}`);
+%}
+
+###############################################################################
+# §B — token endpoint exact-match probe, one per URI
+#
+# The decisive check, and the reason this file is worth having: it needs no MAL
+# session and no browser. MAL validates client + redirect URI *before* it looks at
+# the code — confirmed by the 2026-08-06 run — so an intentionally invalid code
+# separates the two outcomes:
+#
+#   400 `invalid_request`  → the redirect URI MATCHED. MAL got as far as the code
+#     hint "Cannot decrypt          and choked on it, which is the whole point.
+#     the authorization code"       Note the code is `invalid_request`, not the
+#                                   `invalid_grant` RFC 6749 §5.2 asks for.
+#   401 `invalid_client`   → the redirect URI DID NOT match (or the client ID is
+#     "Client authentication         wrong / the app is App Type `web` and wants a
+#      failed"                       secret). Byte-identical body in every case,
+#                                    so the status is the only signal.
+#
+# The check runs only when `redirect_uri` is present — B0 omits it and still gets
+# the 400. Absent is not the same as mismatched here.
+#
+# So: run B0 first. If B0 is not a 400, the client credentials are the problem and
+# every other result in this section is meaningless.
+###############################################################################
+
+### B0 — Control: no redirect_uri, so nothing but the credentials is under test
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{badCode}} &
+code_verifier = {{verifier}}
+
+> {%
+    const err = response.body?.error ?? "-";
+    client.log(`B0 status=${response.status} error=${err}`);
+    client.test("credentials are usable", () => {
+        client.assert(response.status === 400,
+            `expected 400 invalid_request, got ${response.status} ${err} — fix the client ID/secret before trusting B1..B8`);
+    });
+    // This is ONLY a credentials control. It stayed 400 with all eight URIs
+    // registered, so the token endpoint validates redirect_uri only when it is
+    // present — an omitted one is not an error here. A9 is the request that
+    // proves omitting is illegal, and it does so at the authorize endpoint.
+    // Whether the token endpoint enforces "same URI as authorize, or neither"
+    // can only be seen with a real (decryptable) code — see §F.
+%}
+
+### B1 — Android custom scheme
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{badCode}} &
+code_verifier = {{verifier}} &
+redirect_uri = {{uri1}}
+
+> {%
+    const err = response.body?.error ?? "-";
+    client.log(`B1 status=${response.status} error=${err} → ${response.status === 400 ? "REGISTERED" : "NOT REGISTERED"}`);
+%}
+
+### B2 — Desktop loopback, IP literal
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{badCode}} &
+code_verifier = {{verifier}} &
+redirect_uri = {{uri2}}
+
+> {%
+    const err = response.body?.error ?? "-";
+    client.log(`B2 status=${response.status} error=${err} → ${response.status === 400 ? "REGISTERED" : "NOT REGISTERED"}`);
+%}
+
+### B3 — Desktop loopback, `localhost` name
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{badCode}} &
+code_verifier = {{verifier}} &
+redirect_uri = {{uri3}}
+
+> {%
+    const err = response.body?.error ?? "-";
+    client.log(`B3 status=${response.status} error=${err} → ${response.status === 400 ? "REGISTERED" : "NOT REGISTERED"}`);
+%}
+
+### B4 — Web wasmJs behind the reverse proxy
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{badCode}} &
+code_verifier = {{verifier}} &
+redirect_uri = {{uri4}}
+
+> {%
+    const err = response.body?.error ?? "-";
+    client.log(`B4 status=${response.status} error=${err} → ${response.status === 400 ? "REGISTERED" : "NOT REGISTERED"}`);
+%}
+
+### B5 — Web js behind the reverse proxy
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{badCode}} &
+code_verifier = {{verifier}} &
+redirect_uri = {{uri5}}
+
+> {%
+    const err = response.body?.error ?? "-";
+    client.log(`B5 status=${response.status} error=${err} → ${response.status === 400 ? "REGISTERED" : "NOT REGISTERED"}`);
+%}
+
+### B6 — Web wasmJs dev server on :18020
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{badCode}} &
+code_verifier = {{verifier}} &
+redirect_uri = {{uri6}}
+
+> {%
+    const err = response.body?.error ?? "-";
+    client.log(`B6 status=${response.status} error=${err} → ${response.status === 400 ? "REGISTERED" : "NOT REGISTERED"}`);
+%}
+
+### B7 — Web js dev server on :18030
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{badCode}} &
+code_verifier = {{verifier}} &
+redirect_uri = {{uri7}}
+
+> {%
+    const err = response.body?.error ?? "-";
+    client.log(`B7 status=${response.status} error=${err} → ${response.status === 400 ? "REGISTERED" : "NOT REGISTERED"}`);
+%}
+
+### B8 — Legacy paste-the-code URI (control: expect REGISTERED)
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{badCode}} &
+code_verifier = {{verifier}} &
+redirect_uri = {{uri8}}
+
+> {%
+    const err = response.body?.error ?? "-";
+    client.log(`B8 status=${response.status} error=${err} → ${response.status === 400 ? "REGISTERED" : "NOT REGISTERED"}`);
+%}
+
+###############################################################################
+# §C — byte-exactness negative controls
+#
+# Every one of these must come back 401 `invalid_client` even though it is a
+# mutation of a URI that *is* registered. A 400 would mean MAL normalized the
+# difference away.
+#
+# All five came back 401 on 2026-08-06, against a registered URI — so byte-exact
+# matching is confirmed on every dimension tested, and MAL is *stricter* than RFC
+# 3986 on two of them:
+#   C1 trailing slash      401 — not normalized
+#   C2 host case           401 — host case is significant, though RFC 3986 §3.2.2
+#                                makes it case-insensitive
+#   C3 explicit :443       401 — the default port is significant too, so MAL does
+#                                no scheme-based port normalization at all
+#   C4 extra query param   401 — not tolerated
+#   C5 other loopback port 401 — no RFC 8252 §7.3 leniency, against registered
+#                                port 18040. Every port must be registered, which
+#                                is why 18040 is fixed rather than ephemeral.
+#
+# These only mean something when derived from a genuinely registered URI —
+# otherwise they 401 because nothing is registered, which proves nothing:
+@registeredUri = {{uri4}}
+# Point this at whatever §B reported as REGISTERED before trusting §C.
+###############################################################################
+
+### C1 — Trailing slash
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{badCode}} &
+code_verifier = {{verifier}} &
+redirect_uri = {{registeredUri}}/
+
+> {%
+    const err = response.body?.error ?? "-";
+    client.log(`C1 trailing slash → ${response.status} ${err}`);
+    client.test("trailing slash rejected", () => client.assert(response.status !== 400, "MAL normalized a trailing slash"));
+%}
+
+### C2 — Host case change
+# Keep the path identical to registeredUri; only the host case differs.
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{badCode}} &
+code_verifier = {{verifier}} &
+redirect_uri = https://MAL-UI.localhost/oauth/callback
+
+> {%
+    const err = response.body?.error ?? "-";
+    client.log(`C2 host case → ${response.status} ${err}`);
+    client.test("case change rejected", () => client.assert(response.status !== 400, "MAL lowercased the host"));
+%}
+
+### C3 — Explicit default port on the registered host
+# `https://host:443/p` and `https://host/p` are the same URI after RFC 3986
+# normalization, so this is the cheapest test of whether MAL normalizes at all.
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{badCode}} &
+code_verifier = {{verifier}} &
+redirect_uri = https://mal-ui.localhost:443/oauth/callback
+
+> {%
+    const err = response.body?.error ?? "-";
+    client.log(`C3 explicit :443 → ${response.status} ${err}`);
+    client.test("default port not normalized", () => client.assert(response.status !== 400, "MAL normalizes the default port — it does do RFC 3986 normalization"));
+%}
+
+### C4 — Extra query parameter appended to a registered URI
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{badCode}} &
+code_verifier = {{verifier}} &
+redirect_uri = {{registeredUri}}%3Fextra%3D1
+
+> {%
+    const err = response.body?.error ?? "-";
+    client.log(`C4 extra query param → ${response.status} ${err}`);
+    client.test("extra query param rejected", () => client.assert(response.status !== 400, "MAL tolerated an extra query parameter"));
+%}
+
+### C5 — Loopback port leniency (RFC 8252 §7.3), which MAL should not have
+# Only meaningful once a loopback URI (2 or 3) is registered — until then this
+# 401s because no loopback URI exists on the app at all. Registered port is 18040.
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{badCode}} &
+code_verifier = {{verifier}} &
+redirect_uri = http://127.0.0.1:54321/oauth/callback
+
+> {%
+    const err = response.body?.error ?? "-";
+    client.log(`C5 ephemeral loopback port → ${response.status} ${err}`);
+    client.test("port leniency absent", () => client.assert(response.status !== 400, "MAL ignores the loopback port — ports need not be registered"));
+%}
+
+###############################################################################
+# §D — the local endpoints that have to receive the redirect
+#
+# §A and §B only prove MAL will *send* the browser to these URLs. These prove
+# something is listening when it arrives. Start what each one needs first:
+#
+#   ./gradlew :server:run                                            # D1..D3
+#   ./gradlew :app:webApp:wasmJsBrowserDevelopmentRun --continuous    # D4, D6
+#   ./gradlew :app:webApp:jsBrowserDevelopmentRun --continuous        # D5, D7
+#   ./gradlew :app:desktopApp:run, then arm the login flow            # §E
+###############################################################################
+
+### D1 — Relay token endpoint passes MAL's answer through unchanged
+# Same body as B2, through `:server`. Status and `error` must match B2 exactly;
+# the relay is a pass-through and a divergence here is a relay bug, not a MAL one.
+POST {{relay}}/mal/oauth2/token
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{badCode}} &
+code_verifier = {{verifier}} &
+redirect_uri = {{uri2}}
+
+> {%
+    client.log(`D1 relay → ${response.status} ${response.body?.error ?? "-"} (compare with B2)`);
+    client.test("relay reachable", () => client.assert(response.status !== 0, ":server is not running on 18010"));
+%}
+
+### D2 — Relay API passthrough rejects an unauthenticated call the way MAL does
+GET {{relay}}/mal/v2/users/@me?fields=name
+Accept: application/json
+
+> {%
+    client.log(`D2 relay /v2 → ${response.status}`);
+    client.test("relay forwards to the API", () => client.assert(response.status === 401, `expected 401 from MAL, got ${response.status}`));
+%}
+
+### D3 — Relay preflight
+# The whole reason the relay is same-origin: MAL answers OPTIONS with 405 and
+# sends no CORS headers. Same-origin means the browser never preflights, so a
+# 404/405 here is fine — what matters is that no separate origin is involved.
+# If this ever needs to succeed, the relay has been moved off-origin and the
+# original CORS failure is back.
+OPTIONS {{relay}}/mal/oauth2/token
+Origin: {{proxyWasm}}
+Access-Control-Request-Method: POST
+Access-Control-Request-Headers: content-type
+
+> {%
+    client.log(`D3 preflight → ${response.status} allow-origin=${response.headers.valueOf("Access-Control-Allow-Origin") ?? "none"}`);
+%}
+
+### D4 — wasmJs dev server serves /oauth/callback instead of 404ing
+# Needs `historyApiFallback` (ticket 12). A 404 here means the redirect lands on
+# a webpack error page and the code is lost.
+GET {{webWasm}}/oauth/callback?code=probe-code&state={{state}}
+
+> {%
+    client.log(`D4 wasmJs callback → ${response.status} ${response.headers.valueOf("Content-Type") ?? "-"}`);
+    client.test("callback route served", () => client.assert(response.status === 200, `expected 200 index.html, got ${response.status}`));
+%}
+
+### D5 — js dev server serves /oauth/callback
+GET {{webJs}}/oauth/callback?code=probe-code&state={{state}}
+
+> {%
+    client.log(`D5 js callback → ${response.status} ${response.headers.valueOf("Content-Type") ?? "-"}`);
+    client.test("callback route served", () => client.assert(response.status === 200, `expected 200 index.html, got ${response.status}`));
+%}
+
+### D6 — Dev-server /mal proxy reaches the relay (wasmJs)
+# Three places must agree on the `/mal` prefix: MAL_RELAY_PATH_PREFIX in :core,
+# `webpack.config.d/devserver.js`, and the reverse proxy. This checks the second.
+GET {{webWasm}}/mal/v2/users/@me?fields=name
+Accept: application/json
+
+> {%
+    client.log(`D6 dev-server /mal proxy → ${response.status}`);
+    client.test("proxied, not swallowed by the SPA fallback", () => client.assert(response.status === 401, `expected 401 from MAL through the relay, got ${response.status} — a 200 means historyApiFallback ate /mal`));
+%}
+
+### D7 — Dev-server /mal proxy reaches the relay (js)
+GET {{webJs}}/mal/v2/users/@me?fields=name
+Accept: application/json
+
+> {%
+    client.log(`D7 dev-server /mal proxy → ${response.status}`);
+    client.test("proxied, not swallowed by the SPA fallback", () => client.assert(response.status === 401, `expected 401 from MAL through the relay, got ${response.status}`));
+%}
+
+### D8 — Reverse proxy: callback route on the wasmJs hostname
+GET {{proxyWasm}}/oauth/callback?code=probe-code&state={{state}}
+
+> {%
+    client.log(`D8 ${response.status} — reverse proxy serving the app`);
+%}
+
+### D9 — Reverse proxy: /mal routed to :server on the wasmJs hostname
+GET {{proxyWasm}}/mal/v2/users/@me?fields=name
+
+> {%
+    client.log(`D9 → ${response.status}`);
+    client.test("proxy routes /mal to 18010", () => client.assert(response.status === 401, `expected 401 from MAL, got ${response.status}`));
+%}
+
+### D10 — Reverse proxy: callback route on the js hostname
+GET {{proxyJs}}/oauth/callback?code=probe-code&state={{state}}
+
+> {%
+    client.log(`D10 ${response.status} — reverse proxy serving the js app`);
+%}
+
+### D11 — Reverse proxy: /mal on the js hostname
+GET {{proxyJs}}/mal/v2/users/@me?fields=name
+
+> {%
+    client.log(`D11 → ${response.status}`);
+    client.test("proxy routes /mal to 18010", () => client.assert(response.status === 401, `expected 401 from MAL, got ${response.status}`));
+%}
+
+###############################################################################
+# §E — desktop loopback listener
+#
+# Run these while the desktop app has the flow armed (`arm(redirectUri)` has run
+# and it is waiting in `await()`), i.e. after pressing sign-in but before
+# approving on MAL. Nothing should be listening on 18040 at any other time — E3
+# checks that.
+###############################################################################
+
+### E1 — The listener answers on the loopback address
+# Expect a 200 HTML "you can close this window" page, and the app to leave the
+# waiting state with a `state` mismatch error (the state below is not the one it
+# minted). That error is the success signal here: it proves the code arrived.
+GET {{loopback}}/oauth/callback?code=probe-code&state={{state}}
+
+> {%
+    client.log(`E1 listener → ${response.status}`);
+    client.test("listener armed", () => client.assert(response.status === 200, `expected 200 from the loopback listener, got ${response.status}`));
+%}
+
+### E2 — An error redirect is handled, not just the happy path
+GET {{loopback}}/oauth/callback?error=access_denied&error_description=user+denied+the+request&state={{state}}
+
+> {%
+    client.log(`E2 error redirect → ${response.status}`);
+%}
+
+### E3 — The listener is NOT reachable from the LAN
+# Spec trap 6: `HttpServer.create(InetSocketAddress(port), 0)` binds 0.0.0.0 and
+# exposes the callback — and with it authorization codes — to the whole network.
+# Set the lanHost variable above first. This must fail to connect or time out; a 200
+# means the bind address is wrong.
+GET http://{{lanHost}}:18040/oauth/callback?code=probe-code&state={{state}}
+
+> {%
+    client.log(`E3 LAN reachability → ${response.status} — anything other than a connection failure is a bug`);
+    client.test("not bound to 0.0.0.0", () => client.assert(false, "the listener answered on the LAN address — bind loopback explicitly"));
+%}
+
+### E4 — Unknown path on the listener
+# Anything that is not the callback path should not be served; the listener is
+# not a general-purpose web server on the user's machine.
+GET {{loopback}}/
+
+> {%
+    client.log(`E4 root path → ${response.status}`);
+%}
+
+###############################################################################
+# §F — one real exchange, after the set is registered
+#
+# The only check that proves the whole round trip. Do it once per redirect URI
+# form you intend to ship.
+#
+#   1. Run the matching §A request's URL in a logged-in browser and approve.
+#   2. Copy `code` out of the address bar you land on.
+#   3. Paste it into the realCode variable, put the *same* URI in
+#      realRedirectUri, and run F1 within the code's lifetime (single-use,
+#      short-lived).
+#
+# `redirect_uri` must be byte-identical to the one sent to authorize — sent to
+# both endpoints or to neither.
+###############################################################################
+
+@realCode = PASTE-THE-CODE-HERE
+# Defaults to the one URI known to be registered; change it per form under test.
+@realRedirectUri = {{registeredUri}}
+
+### F1 — Exchange a real code
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = authorization_code &
+code = {{realCode}} &
+code_verifier = {{verifier}} &
+redirect_uri = {{realRedirectUri}}
+
+> {%
+    client.log(`F1 → ${response.status} ${response.body?.error ?? ""}`);
+    client.test("token issued", () => client.assert(response.status === 200 && !!response.body?.access_token, `no access token: ${JSON.stringify(response.body)}`));
+    if (response.body?.access_token) {
+        client.global.set("accessToken", response.body.access_token);
+        client.global.set("refreshToken", response.body.refresh_token);
+    }
+%}
+
+### F2 — Prove the token works (the cheapest possible API call)
+GET https://api.myanimelist.net/v2/users/@me?fields=name
+Authorization: Bearer {{accessToken}}
+
+> {%
+    client.log(`F2 → ${response.status} ${response.body?.name ?? ""}`);
+%}
+
+### F3 — Same call through the relay, which is the path web actually takes
+GET {{relay}}/mal/v2/users/@me?fields=name
+Authorization: Bearer {{accessToken}}
+
+> {%
+    client.log(`F3 relay → ${response.status} ${response.body?.name ?? ""}`);
+%}
+
+### F4 — Refresh. No `redirect_uri` on this grant.
+# @no-cookie-jar
+POST {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+client_id = {{clientId}} &
+client_secret = {{clientSecret}} &
+grant_type = refresh_token &
+refresh_token = {{refreshToken}}
+
+> {%
+    client.log(`F4 refresh → ${response.status} ${response.body?.error ?? ""}`);
+    if (response.body?.access_token) {
+        client.global.set("accessToken", response.body.access_token);
+        client.global.set("refreshToken", response.body.refresh_token);
+    }
+%}
