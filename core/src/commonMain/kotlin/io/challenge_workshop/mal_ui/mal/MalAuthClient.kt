@@ -86,7 +86,7 @@ class MalAuthClient(
             parameters.append("code_challenge", Pkce.codeChallengeOf(codeVerifier))
             parameters.append("code_challenge_method", Pkce.CHALLENGE_METHOD)
             parameters.append("state", state)
-            config.redirectUri?.let { parameters.append("redirect_uri", it) }
+            parameters.append("redirect_uri", config.redirectUri)
         }.buildString()
         return MalAuthRequest(authorizationUrl = url, codeVerifier = codeVerifier, state = state)
     }
@@ -97,8 +97,9 @@ class MalAuthClient(
             append("grant_type", "authorization_code")
             append("code", code)
             append("code_verifier", codeVerifier)
-            // Required here if and only if it was sent to the authorize endpoint.
-            config.redirectUri?.let { append("redirect_uri", it) }
+            // Always sent to the authorize endpoint, so it is always required here too — and
+            // byte-identically, since MAL compares the two strings rather than the two URIs.
+            append("redirect_uri", config.redirectUri)
         }
 
     /** Trades a refresh token for a fresh pair. The old refresh token stays valid until it expires. */

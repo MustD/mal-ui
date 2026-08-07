@@ -32,7 +32,7 @@ class MalAuthClientTest {
 
     private val config = MalAuthConfig(
         clientId = "client-id",
-        redirectUri = "http://localhost:8080/oauth/callback",
+        redirectUri = "http://127.0.0.1:18040/oauth/callback",
     )
 
     /** Captures outgoing requests so assertions can inspect what was actually sent. */
@@ -72,14 +72,23 @@ class MalAuthClientTest {
         assertEquals("plain", params["code_challenge_method"])
         assertEquals(request.codeVerifier, params["code_challenge"], "plain method: challenge == verifier")
         assertEquals(request.state, params["state"])
-        assertEquals("http://localhost:8080/oauth/callback", params["redirect_uri"])
+        assertEquals("http://127.0.0.1:18040/oauth/callback", params["redirect_uri"])
         assertTrue(request.authorizationUrl.startsWith(MalAuthConfig.DEFAULT_AUTHORIZE_ENDPOINT))
     }
 
     @Test
-    fun authorizationUrlOmitsRedirectUriWhenNotConfigured() {
-        val client = MalAuthClient(config.copy(redirectUri = null), HttpClient(MockEngine { respond("") }))
-        assertNull(Url(client.beginAuthorization().authorizationUrl).parameters["redirect_uri"])
+    fun bothEndpointsSendTheByteIdenticalRedirectUri() = runTest {
+        // MAL matches byte-exactly and validates at *both* endpoints, so the two can never diverge —
+        // and since registering more than one URI made omitting it illegal at the authorize
+        // endpoint, there is no "send it to neither" branch left to take.
+        val recorder = Recorder()
+        val client = clientOf(recorder)
+
+        val authorizeUri = Url(client.beginAuthorization().authorizationUrl).parameters["redirect_uri"]
+        client.exchangeCode("the-code", "the-verifier")
+
+        assertEquals(config.redirectUri, authorizeUri)
+        assertEquals(authorizeUri, recorder.formParams()["redirect_uri"])
     }
 
     @Test
@@ -103,7 +112,7 @@ class MalAuthClientTest {
         assertEquals("the-verifier", sent["code_verifier"])
         assertEquals("client-id", sent["client_id"])
         // redirect_uri went to the authorize endpoint, so it must be repeated here.
-        assertEquals("http://localhost:8080/oauth/callback", sent["redirect_uri"])
+        assertEquals("http://127.0.0.1:18040/oauth/callback", sent["redirect_uri"])
     }
 
     @Test

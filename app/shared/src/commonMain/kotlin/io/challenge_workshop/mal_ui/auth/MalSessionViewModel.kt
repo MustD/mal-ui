@@ -70,7 +70,7 @@ class MalSessionViewModel(
      * The Redirect URI this target sends to MAL. Surfaced because a mismatch reports as a 401
      * `invalid_client`, which points at the Client ID and not at the URI.
      */
-    val redirectUri: String get() = repository.config.value.redirectUri ?: "(none)"
+    val redirectUri: String get() = repository.config.value.redirectUri
 
     /** True on web, where token and API calls go via `:server` instead of straight to MAL. */
     val usesRelay: Boolean = !endpoints.tokenEndpoint.startsWith("https://myanimelist.net")

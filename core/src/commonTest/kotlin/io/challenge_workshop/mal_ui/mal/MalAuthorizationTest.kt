@@ -10,7 +10,7 @@ class MalAuthorizationTest {
 
     @Test
     fun parsesCodeAndStateFromFullRedirectUrl() {
-        val result = parseRedirect("http://localhost:8080/oauth/callback?code=abc123&state=xyz")
+        val result = parseRedirect("http://127.0.0.1:18040/oauth/callback?code=abc123&state=xyz")
         assertEquals("abc123", result.code)
         assertEquals("xyz", result.state)
     }
@@ -48,7 +48,7 @@ class MalAuthorizationTest {
 
     @Test
     fun rejectsUrlWithNoQueryString() {
-        assertFailsWith<MalAuthException> { parseRedirect("http://localhost:8080/oauth/callback") }
+        assertFailsWith<MalAuthException> { parseRedirect("http://127.0.0.1:18040/oauth/callback") }
     }
 
     @Test

@@ -96,16 +96,16 @@ class MalSessionRepository(
      *
      * ```
      * Restoring
-     *  ├─ Pending Authorization present, fresh → Authorizing(...)   // resume an interrupted flow
-     *  ├─ Pending Authorization present, stale → clear it, then as below
-     *  ├─ tokens present                       → SignedIn(cachedUser)
-     *  └─ store empty                          → SignedOut(NeverSignedIn)
+     *  ├─ Pending Authorization present, usable → Authorizing(...)   // resume an interrupted flow
+     *  ├─ Pending Authorization present, not    → clear it, then as below
+     *  ├─ tokens present                        → SignedIn(cachedUser)
+     *  └─ store empty                           → SignedOut(NeverSignedIn)
      * ```
      */
     suspend fun restore() {
         val pending = store.readPending()
         if (pending != null) {
-            if (isFresh(pending)) {
+            if (isResumable(pending)) {
                 _state.value = SessionState.Authorizing(pending)
                 return
             }
@@ -132,7 +132,7 @@ class MalSessionRepository(
         val pending = store.writePending(
             codeVerifier = request.codeVerifier,
             state = request.state,
-            redirectUri = _config.value.redirectUri.orEmpty(),
+            redirectUri = _config.value.redirectUri,
             clientId = _config.value.clientId,
         )
         _state.value = SessionState.Authorizing(pending)
@@ -334,6 +334,18 @@ class MalSessionRepository(
     private fun markRefreshing(refreshing: Boolean) {
         _state.update { if (it is SessionState.SignedIn) it.copy(refreshing = refreshing) else it }
     }
+
+    /**
+     * Whether an interrupted authorization is worth putting the user back into.
+     *
+     * A record with no Redirect URI cannot be one: [completeAuthorization] would send an empty
+     * `redirect_uri`, which MAL validates whenever it is *present*, and the exchange would fail as a
+     * 401 `invalid_client` naming the Client ID. Only a build from before the URI became mandatory
+     * could have written one, and nothing here can repair it — so it is discarded rather than
+     * resumed into a state whose only exit is a confusing error.
+     */
+    private fun isResumable(pending: PendingAuthorization): Boolean =
+        pending.redirectUri.isNotBlank() && isFresh(pending)
 
     /**
      * MAL's authorization codes are single-use and short-lived, so a Pending Authorization that old

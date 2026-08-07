@@ -29,8 +29,9 @@ design are now **settled by measurement** — see that section for the answers a
 So the token half is done. What is missing is the *transport of the code back into the app*, plus everything that
 follows from tokens outliving a single screen:
 
-1. **No redirect capture on any platform.** `LOOPBACK_REDIRECT_URI` exists but nothing listens on it; Android has no
-   intent filter; web has no callback route.
+1. **No redirect capture on any platform.** `platformRedirectUri()` now names a per-target Redirect URI, but nothing
+   listens on the desktop port; Android has no intent filter; web has no callback route. (The `LOOPBACK_REDIRECT_URI`
+   this originally described has since been replaced by `DESKTOP_REDIRECT_URI` on port 18040.)
 2. **The PKCE verifier is only in memory.** `MalLoginViewModel.authRequest` is a `mutableStateOf`. It survives an
    Android configuration change — but *not* Android process death while the user is in the browser, and *not* a web
    full-page redirect. Both are on the happy path of a redirect flow, so this is the single biggest correctness gap.
@@ -206,7 +207,7 @@ This is the fix for gap 2 and the thing that makes a redirect flow possible at a
 data class PendingAuthorization(
     val codeVerifier: String,
     val state: String,
-    val redirectUri: String?,
+    val redirectUri: String,       // shipped non-null; a record written without one is discarded on restore
     val clientId: String,          // entered at runtime today — without it the token call can't be rebuilt
     val startedAtEpochMs: Long,
 )
@@ -467,9 +468,9 @@ Embedding Ktor instead would drag Netty (~4 MB, plus `sun.misc.Unsafe` → also 
 **Port:** fixed, because MAL does no port-lenient matching
 ([§1.3](#13-two-behaviours-worth-knowing-do-not-need-testing)). **18040** fits the documented decade-slot convention. Do
 *not* keep the current `localhost:8080` — 8080 is heavily contended on a dev machine and outside this project's block.
-Note that changing
-`LOOPBACK_REDIRECT_URI` invalidates any existing MAL registration, and its KDoc ("the browser fails to load it, but the
-address bar still shows `?code=…`") stops being true once something listens.
+**Done:** `LOOPBACK_REDIRECT_URI` was deleted rather than repointed, because its KDoc ("the browser fails to load it,
+but the address bar still shows `?code=…`") stops being true once something listens. `DESKTOP_REDIRECT_URI` and
+`DESKTOP_LOOPBACK_PORT` in `:core` replace it, and 18040 is registered on the MAL app.
 
 **Bind loopback explicitly.** `HttpServer.create(InetSocketAddress(port), 0)` — the obvious-looking call — binds
 `0.0.0.0` and exposes the callback to the LAN `[verified]`. Use

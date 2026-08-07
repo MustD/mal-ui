@@ -244,6 +244,31 @@ class MalSessionAuthorizationTest {
     }
 
     @Test
+    fun a_pending_record_with_no_redirect_uri_is_discarded_rather_than_resumed() = runTest {
+        // What a build from before `redirectUri` was mandatory left behind: it wrote
+        // `config.redirectUri.orEmpty()`, and the config's was null. Resuming one would send
+        // `redirect_uri=` to the token endpoint, which MAL validates whenever it is present — so the
+        // user would get a 401 `invalid_client` naming the Client ID for a record that was never
+        // completable. Nothing can repair it, so it must not pin the app in `Authorizing`.
+        val f = Fixture()
+        f.store.writePending(
+            codeVerifier = "verifier-from-the-old-build",
+            state = "state-from-the-old-build",
+            redirectUri = "",
+            clientId = "the-client",
+        )
+
+        f.repository.restore()
+
+        assertNull(f.store.readPending(), "an uncompletable record must be cleared, not kept")
+        assertEquals(
+            SignedOutReason.NeverSignedIn,
+            assertIs<SessionState.SignedOut>(f.repository.state.value).reason,
+        )
+        f.repository.close()
+    }
+
+    @Test
     fun a_denied_authorization_clears_the_pending_record() = runTest {
         val f = Fixture()
         f.repository.beginAuthorization()

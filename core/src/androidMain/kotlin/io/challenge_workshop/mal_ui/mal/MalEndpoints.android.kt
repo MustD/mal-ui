@@ -5,3 +5,6 @@ actual fun platformMalEndpoints(): MalEndpoints = MalEndpoints(
     tokenEndpoint = MalAuthConfig.DEFAULT_TOKEN_ENDPOINT,
     apiBaseUrl = MalAuthConfig.DEFAULT_API_BASE_URL,
 )
+
+/** A private-use URI scheme claimed by the manifest — see [ANDROID_REDIRECT_URI]. */
+actual fun platformRedirectUri(): String = ANDROID_REDIRECT_URI

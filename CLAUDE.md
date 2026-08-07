@@ -27,13 +27,18 @@ The web targets need `:server` running as well — see [MAL authentication](#mal
 
 ### Ports
 
-This project owns the **18010–18090** block. Ports are assigned in decade slots; 18040 onwards is unallocated.
+This project owns the **18010–18090** block. Ports are assigned in decade slots; 18050 onwards is unallocated.
 
-| Port  | Service                                    |
-|-------|--------------------------------------------|
-| 18010 | `:server` — Ktor, MAL relay, loopback only |
-| 18020 | `:app:webApp` dev server, wasmJs target    |
-| 18030 | `:app:webApp` dev server, js target        |
+| Port  | Service                                              |
+|-------|------------------------------------------------------|
+| 18010 | `:server` — Ktor, MAL relay, loopback only           |
+| 18020 | `:app:webApp` dev server, wasmJs target              |
+| 18030 | `:app:webApp` dev server, js target                  |
+| 18040 | Desktop OAuth callback on `127.0.0.1` — no listener yet |
+
+18040 is reserved for the desktop OAuth callback and cannot be made ephemeral: MAL does no RFC 8252 §7.3 port-lenient
+matching, so the port is part of the byte-exact Redirect URI registered on the app (`DESKTOP_LOOPBACK_PORT` in
+`:core`).
 
 The two web targets have separate ports so both can run at once. Ports are set per target in
 `app/webApp/build.gradle.kts`; everything shared by both (host binding, `allowedHosts`, the `/mal` proxy) is in
