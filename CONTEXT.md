@@ -20,7 +20,9 @@ request, in-flight login
 **Redirect Capture**:
 The platform-specific means by which the authorization code gets from MAL's redirect back into the app: a loopback HTTP
 listener on desktop, a custom-scheme intent or Auth Tab result on Android, a popup message or same-origin route on web.
-_Avoid_: Callback handling, deep link (a deep link is only the Android form of it)
+In code it is `AuthRedirectChannel`, whose three phases — **arm** (reserve the platform resource), **open** (send the
+user to MAL), **await** (the redirect, a cancellation or a failure) — each exist because one platform cannot work
+without them. _Avoid_: Callback handling, deep link (a deep link is only the Android form of it)
 
 **Paste-the-code**:
 The fallback in which the user copies the redirect URL out of their browser's address bar and pastes it into the app.

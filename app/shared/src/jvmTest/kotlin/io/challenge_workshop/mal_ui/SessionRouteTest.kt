@@ -2,6 +2,10 @@
 
 package io.challenge_workshop.mal_ui
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -13,6 +17,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
+import io.challenge_workshop.mal_ui.auth.PasteOnlyRedirectChannel
 import io.challenge_workshop.mal_ui.auth.SIGNED_OUT_REASON_TAG
 import io.challenge_workshop.mal_ui.auth.SessionScreenTag
 import io.challenge_workshop.mal_ui.mal.DESKTOP_REDIRECT_URI
@@ -136,6 +141,42 @@ class SessionRouteTest {
         )
     }
 
+    /**
+     * The seam the channel abstraction rests on, exercised for real: `rememberAuthRedirectChannel()`
+     * resolves to this target's actual, the click reaches the ViewModel through it, and — since that
+     * actual is still [PasteOnlyRedirectChannel] — the browser is opened by the screen and the login
+     * lands on the paste field, exactly as it did before the channel existed.
+     *
+     * Routed off the live state rather than a fixed one, because the transition to `Authorizing` is
+     * half of what is being checked.
+     */
+    @Test
+    fun signing_in_goes_through_this_targets_channel_and_still_lands_on_paste_the_code() {
+        val opened = mutableListOf<String>()
+        runComposeUiTest {
+            setContent {
+                // Otherwise the desktop `UriHandler` really does launch a browser from a unit test.
+                CompositionLocalProvider(LocalUriHandler provides RecordingUriHandler(opened)) {
+                    SessionRoute(viewModel.state.collectAsState().value, viewModel)
+                }
+            }
+
+            onNodeWithText("Sign in with MyAnimeList").performClick()
+
+            val state = repository.state.value
+            assertTrue(state is SessionState.Authorizing, "$state")
+            assertEquals(DESKTOP_REDIRECT_URI, state.pending.redirectUri)
+            val authorizationUrl = viewModel.authorizationUrlFor(state.pending)
+            assertEquals(listOf(authorizationUrl), opened)
+
+            // Paste-the-code stays reachable throughout: the URL is on screen to copy by hand, since
+            // no platform's browser-opening call reliably reports whether it worked.
+            onNodeWithTag(SessionScreenTag.Authorizing.tag).assertIsDisplayed()
+            onNodeWithText(authorizationUrl).assertIsDisplayed()
+            onNodeWithText("Redirect URL or authorization code").assertIsDisplayed()
+        }
+    }
+
     @Test
     fun the_debug_panel_starts_collapsed() {
         runComposeUiTest {
@@ -175,6 +216,13 @@ class SessionRouteTest {
                 "Force 401 must keep the refresh token — there is nothing to refresh with otherwise.",
             )
             onNodeWithText("deliberately invalidated", substring = true).assertIsDisplayed()
+        }
+    }
+
+    /** Stands in for the platform's browser, which a unit test must not actually start. */
+    private class RecordingUriHandler(private val opened: MutableList<String>) : UriHandler {
+        override fun openUri(uri: String) {
+            opened += uri
         }
     }
 

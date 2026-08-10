@@ -9,11 +9,11 @@ import io.challenge_workshop.mal_ui.session.MalSessionRepository
 import io.challenge_workshop.mal_ui.session.PendingAuthorization
 import io.challenge_workshop.mal_ui.session.SessionDiagnostics
 import io.challenge_workshop.mal_ui.session.SessionState
-import io.challenge_workshop.mal_ui.mal.MalAuthException
 import io.challenge_workshop.mal_ui.mal.platformMalEndpoints
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * Compose's adapter onto [MalSessionRepository].
@@ -80,6 +80,13 @@ class MalSessionViewModel(
 
     private var authJob: Job? = null
 
+    /**
+     * The whole sign-in attempt, held apart from [authJob] — which every short operation overwrites —
+     * because this one lives for as long as the user is away on myanimelist.net. Cancelling it is how
+     * an armed [AuthRedirectChannel] releases whatever it reserved.
+     */
+    private var signInJob: Job? = null
+
     init {
         // Exactly once per process: the repository is a singleton, so a recreated ViewModel finds the
         // state already settled and leaves it alone.
@@ -100,35 +107,96 @@ class MalSessionViewModel(
     }
 
     /**
-     * Starts a sign-in and hands the authorization URL to [openUri].
+     * Starts a sign-in: arms this target's Redirect Capture, mints the authorization URL, and sends the
+     * user to MAL.
      *
-     * The URL is passed out rather than stored, and never logged: under `plain` PKCE the code verifier
-     * travels inside it.
+     * [channel] is passed in rather than held, because it comes from a `@Composable` — see
+     * [AuthRedirectChannel] for why it has to. [openUri] is the browser-opening fallback for when the
+     * channel reports [ArmResult.Unsupported] and Paste-the-code takes over; an armed channel opens the
+     * browser itself, since on web that call *is* the popup.
+     *
+     * Nothing here logs the URL: under `plain` PKCE the code verifier travels inside it.
+     *
+     * The stretch from the click to [AuthRedirectChannel.open] must not really suspend — a web popup
+     * loses its user activation if it does, and WebKit's window is 1 second. `arm` and
+     * `beginAuthorization` are `suspend` but complete without dispatching on every target today; a web
+     * channel that cannot rely on that has to open `about:blank` and set `location.href` afterwards.
      */
-    fun signIn(openUri: (String) -> Unit) {
+    fun signIn(channel: AuthRedirectChannel, openUri: (String) -> Unit) {
         if (!canStart) return
         repository.useClientId(clientId)
-        launchGuarded { openUri(repository.beginAuthorization()) }
+        // One coroutine for the whole attempt, including the wait. An armed channel that is never
+        // awaited can never be released, so nothing may come between arming it and awaiting it.
+        signInJob = launchGuarded {
+            when (val armed = channel.arm(redirectUri)) {
+                // Reported before anything is minted and before the user has approved anything on MAL
+                // — which is the entire reason `arm` is a phase of its own.
+                is ArmResult.Failed -> error = armed.message
+
+                // No capture here, so the screen opens the browser itself and Paste-the-code takes
+                // over. Calling `open` on a channel that declined to arm would capture nothing.
+                ArmResult.Unsupported -> openUri(repository.beginAuthorization())
+
+                ArmResult.Armed -> {
+                    channel.open(repository.beginAuthorization())
+                    // The user is away on myanimelist.net from here, and nothing is in flight. `busy`
+                    // disables the paste field, the Complete button and Cancel, so leaving it set for
+                    // the length of the wait would take Paste-the-code away exactly when it is needed.
+                    busy = false
+                    awaitCapture(channel)
+                }
+            }
+        }
+    }
+
+    /** Every outcome lands on a path the paste field already uses, rather than a parallel one. */
+    private suspend fun awaitCapture(channel: AuthRedirectChannel) {
+        when (val captured = channel.await()) {
+            is AuthRedirectResult.Received -> {
+                busy = true
+                // Verbatim into the same call the paste field makes, so one parser and one set of
+                // errors — `error=access_denied` reads identically however the redirect arrived.
+                completeAuthorization(captured.rawRedirect)
+            }
+
+            AuthRedirectResult.Cancelled -> repository.cancelAuthorization()
+
+            // The capture broke, not the authorization: stay in `Authorizing`, where the URL and the
+            // paste field are both still on screen.
+            is AuthRedirectResult.Failed -> error = captured.message
+
+            AuthRedirectResult.Unsupported -> Unit
+        }
     }
 
     /** Paste-the-code, and also the path every platform Redirect Capture funnels into. */
     fun completeSignIn(rawRedirect: String = pastedRedirect) {
         if (rawRedirect.isBlank() || busy) return
         launchGuarded {
-            repository.completeAuthorization(rawRedirect)
-            pastedRedirect = ""
+            completeAuthorization(rawRedirect)
+            // A paste can beat the capture to it. Nothing is left to capture, so let the channel go:
+            // cancelling the await is what releases a bound port or an open popup.
+            signInJob?.cancel()
         }
+    }
+
+    private suspend fun completeAuthorization(rawRedirect: String) {
+        repository.completeAuthorization(rawRedirect)
+        pastedRedirect = ""
     }
 
     /** Backing out. Keeps the Pending Authorization — a redirect that lands later is still good. */
     fun cancelSignIn() {
         authJob?.cancel()
+        // Also releases whatever the channel reserved: cancellation is its only teardown path.
+        signInJob?.cancel()
         busy = false
         launchGuarded { repository.cancelAuthorization() }
     }
 
     fun signOut() {
         pastedRedirect = ""
+        signInJob?.cancel()
         launchGuarded { repository.signOut() }
     }
 
@@ -149,20 +217,23 @@ class MalSessionViewModel(
     fun authorizationUrlFor(pending: PendingAuthorization): String =
         repository.authorizationUrlFor(pending)
 
-    private fun launchGuarded(block: suspend () -> Unit) {
+    private fun launchGuarded(block: suspend () -> Unit): Job {
         busy = true
         error = null
-        authJob = viewModelScope.launch {
+        return viewModelScope.launch {
             try {
                 block()
-            } catch (e: MalAuthException) {
-                error = withRelayHint(e.message ?: e.toString())
+            } catch (e: CancellationException) {
+                // Not a failure to report. Cancelling a sign-in is routine — `cancelSignIn`, a paste
+                // that beat the capture, `onCleared` — and reporting it would put "job was cancelled"
+                // in an error card.
+                throw e
             } catch (e: Exception) {
                 error = withRelayHint(e.message ?: e.toString())
             } finally {
                 busy = false
             }
-        }
+        }.also { authJob = it }
     }
 
     /**
@@ -181,5 +252,6 @@ class MalSessionViewModel(
         // The HttpClients belong to the repository, which is process-scoped and outlives this object,
         // so there is nothing here to close — only work in flight to stop.
         authJob?.cancel()
+        signInJob?.cancel()
     }
 }

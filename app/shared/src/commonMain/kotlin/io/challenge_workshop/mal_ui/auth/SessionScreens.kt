@@ -54,6 +54,7 @@ fun RestoringScreen(modifier: Modifier = Modifier) {
 fun SignInScreen(
     state: SessionState.SignedOut,
     viewModel: MalSessionViewModel,
+    channel: AuthRedirectChannel,
     modifier: Modifier = Modifier,
 ) {
     val uriHandler = LocalUriHandler.current
@@ -92,7 +93,12 @@ fun SignInScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Button(onClick = { viewModel.signIn(uriHandler::openUri) }, enabled = viewModel.canStart) {
+            // Called straight from the click and not out of a `launch { }`: a web popup's user
+            // activation is a timestamp window, and WebKit's is one second wide.
+            Button(
+                onClick = { viewModel.signIn(channel, uriHandler::openUri) },
+                enabled = viewModel.canStart,
+            ) {
                 Text("Sign in with MyAnimeList")
             }
             if (viewModel.busy) CircularProgressIndicator(Modifier.padding(4.dp))

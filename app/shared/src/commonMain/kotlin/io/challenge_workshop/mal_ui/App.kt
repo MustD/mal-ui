@@ -6,12 +6,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.challenge_workshop.mal_ui.auth.AuthRedirectChannel
 import io.challenge_workshop.mal_ui.auth.AuthorizingScreen
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
 import io.challenge_workshop.mal_ui.auth.RestoringScreen
 import io.challenge_workshop.mal_ui.auth.SessionScreenTag
 import io.challenge_workshop.mal_ui.auth.SignInScreen
 import io.challenge_workshop.mal_ui.auth.SignedInScreen
+import io.challenge_workshop.mal_ui.auth.rememberAuthRedirectChannel
 import io.challenge_workshop.mal_ui.session.SessionState
 import org.koin.compose.viewmodel.koinViewModel
 
@@ -44,15 +46,21 @@ fun App(viewModel: MalSessionViewModel = koinViewModel()) {
  *
  * No `modifier` parameter: both call sites are in this file and neither has anything to pass, and
  * one that existed only to be overwritten by `testTag` below would be a lie about the seam.
+ *
+ * The [AuthRedirectChannel] is remembered *here*, above the `when`, and not in [SignInScreen]: starting
+ * a sign-in swaps that screen out for [AuthorizingScreen], and a channel that left composition at that
+ * moment would take an Android `ActivityResultLauncher` with it.
  */
 @Composable
 internal fun SessionRoute(state: SessionState, viewModel: MalSessionViewModel) {
+    val channel = rememberAuthRedirectChannel()
+
     when (state) {
         SessionState.Restoring ->
             RestoringScreen(Modifier.testTag(SessionScreenTag.Restoring.tag))
 
         is SessionState.SignedOut ->
-            SignInScreen(state, viewModel, Modifier.testTag(SessionScreenTag.SignIn.tag))
+            SignInScreen(state, viewModel, channel, Modifier.testTag(SessionScreenTag.SignIn.tag))
 
         is SessionState.Authorizing ->
             AuthorizingScreen(state, viewModel, Modifier.testTag(SessionScreenTag.Authorizing.tag))
