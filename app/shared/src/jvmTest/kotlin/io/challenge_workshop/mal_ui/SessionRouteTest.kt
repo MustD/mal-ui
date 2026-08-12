@@ -4,6 +4,8 @@ package io.challenge_workshop.mal_ui
 
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.platform.ClipboardManager
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -16,10 +18,14 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
+import androidx.compose.ui.text.AnnotatedString
+import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListener
+import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListenerTest
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
-import io.challenge_workshop.mal_ui.auth.PasteOnlyRedirectChannel
+import io.challenge_workshop.mal_ui.auth.awaitLoopbackPortFree
 import io.challenge_workshop.mal_ui.auth.SIGNED_OUT_REASON_TAG
 import io.challenge_workshop.mal_ui.auth.SessionScreenTag
+import io.challenge_workshop.mal_ui.mal.DESKTOP_LOOPBACK_PORT
 import io.challenge_workshop.mal_ui.mal.DESKTOP_REDIRECT_URI
 import io.challenge_workshop.mal_ui.mal.MalAuthConfig
 import io.challenge_workshop.mal_ui.mal.MalTokens
@@ -34,6 +40,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
+import java.util.Collections
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -72,6 +79,12 @@ class SessionRouteTest {
     fun tearDown() {
         repository.close()
         Dispatchers.resetMain()
+        // This target's channel binds a real port, and only cancelling releases it. Leaving one
+        // armed would break every later test that needs 18040 — and, in the app, the next sign-in.
+        assertTrue(
+            awaitLoopbackPortFree(),
+            "Port $DESKTOP_LOOPBACK_PORT was left bound by this test.",
+        )
     }
 
     /**
@@ -143,16 +156,22 @@ class SessionRouteTest {
 
     /**
      * The seam the channel abstraction rests on, exercised for real: `rememberAuthRedirectChannel()`
-     * resolves to this target's actual, the click reaches the ViewModel through it, and — since that
-     * actual is still [PasteOnlyRedirectChannel] — the browser is opened by the screen and the login
-     * lands on the paste field, exactly as it did before the channel existed.
+     * resolves to this target's actual — a [LoopbackRedirectListener] that binds 18040 — the click
+     * reaches the ViewModel through it, and the browser is opened by the *channel* rather than by
+     * the screen. Paste-the-code stays on offer throughout regardless.
      *
      * Routed off the live state rather than a fixed one, because the transition to `Authorizing` is
      * half of what is being checked.
+     *
+     * The waits are real. Arming binds a socket off the main dispatcher and the browser launch runs
+     * off it too, so nothing here completes inside `performClick` any more.
+     *
+     * What the listener then does with a redirect is [LoopbackRedirectListenerTest]'s; this test
+     * only proves the wiring reaches it.
      */
     @Test
-    fun signing_in_goes_through_this_targets_channel_and_still_lands_on_paste_the_code() {
-        val opened = mutableListOf<String>()
+    fun signing_in_arms_this_targets_capture_and_still_offers_paste_the_code() {
+        val opened = Collections.synchronizedList(mutableListOf<String>())
         runComposeUiTest {
             setContent {
                 // Otherwise the desktop `UriHandler` really does launch a browser from a unit test.
@@ -162,18 +181,53 @@ class SessionRouteTest {
             }
 
             onNodeWithText("Sign in with MyAnimeList").performClick()
+            waitUntil("the sign-in reaches Authorizing", WAIT_MS) {
+                repository.state.value is SessionState.Authorizing
+            }
 
-            val state = repository.state.value
-            assertTrue(state is SessionState.Authorizing, "$state")
+            val state = repository.state.value as SessionState.Authorizing
             assertEquals(DESKTOP_REDIRECT_URI, state.pending.redirectUri)
             val authorizationUrl = viewModel.authorizationUrlFor(state.pending)
-            assertEquals(listOf(authorizationUrl), opened)
+            waitUntil("the channel opens the browser", WAIT_MS) {
+                opened.toList() == listOf(authorizationUrl)
+            }
 
             // Paste-the-code stays reachable throughout: the URL is on screen to copy by hand, since
             // no platform's browser-opening call reliably reports whether it worked.
             onNodeWithTag(SessionScreenTag.Authorizing.tag).assertIsDisplayed()
             onNodeWithText(authorizationUrl).assertIsDisplayed()
             onNodeWithText("Redirect URL or authorization code").assertIsDisplayed()
+
+            // Not tidying up: cancelling is the *only* thing that gives 18040 back, and a test that
+            // walked away from an armed listener would make the next sign-in — here or in the app —
+            // fail to arm. [tearDown] holds this to it.
+            onNodeWithText("Cancel").performClick()
+            waitUntil("cancelling leaves Authorizing", WAIT_MS) {
+                repository.state.value !is SessionState.Authorizing
+            }
+        }
+    }
+
+    /**
+     * The authorization URL is the whole of Paste-the-code's first half, and it is long enough that
+     * selecting it out of a text field by hand is where people give up. No platform's
+     * browser-opening call reports failure, so this button is the only guaranteed way to it.
+     */
+    @Test
+    fun the_authorization_url_can_be_copied_without_selecting_it() {
+        val clipboard = RecordingClipboard()
+        runComposeUiTest {
+            val pending = pendingAuthorization()
+            @Suppress("DEPRECATION")
+            setContent {
+                CompositionLocalProvider(LocalClipboardManager provides clipboard) {
+                    SessionRoute(SessionState.Authorizing(pending), viewModel)
+                }
+            }
+
+            onNodeWithText("Copy").performClick()
+
+            assertEquals(viewModel.authorizationUrlFor(pending), clipboard.getText()?.text)
         }
     }
 
@@ -219,6 +273,18 @@ class SessionRouteTest {
         }
     }
 
+    /** Stands in for the desktop clipboard, which a unit test must not actually write to. */
+    @Suppress("DEPRECATION")
+    private class RecordingClipboard : ClipboardManager {
+        private var copied: AnnotatedString? = null
+
+        override fun setText(annotatedString: AnnotatedString) {
+            copied = annotatedString
+        }
+
+        override fun getText(): AnnotatedString? = copied
+    }
+
     /** Stands in for the platform's browser, which a unit test must not actually start. */
     private class RecordingUriHandler(private val opened: MutableList<String>) : UriHandler {
         override fun openUri(uri: String) {
@@ -234,6 +300,13 @@ class SessionRouteTest {
         startedAtEpochMs = 0L,
     )
 }
+
+/**
+ * Generous, because these waits are for real sockets and real dispatchers rather than for a frame.
+ * A wait that is too short reads as a flaky test; one that is too long only costs time when
+ * something is already broken.
+ */
+private const val WAIT_MS: Long = 5_000
 
 /** The concatenated text a node draws, for assertions about copy rather than about structure. */
 private fun SemanticsNodeInteraction.textContent(): String =

@@ -29,9 +29,10 @@ design are now **settled by measurement** — see that section for the answers a
 So the token half is done. What is missing is the *transport of the code back into the app*, plus everything that
 follows from tokens outliving a single screen:
 
-1. **No redirect capture on any platform.** `platformRedirectUri()` now names a per-target Redirect URI, but nothing
-   listens on the desktop port; Android has no intent filter; web has no callback route. (The `LOOPBACK_REDIRECT_URI`
-   this originally described has since been replaced by `DESKTOP_REDIRECT_URI` on port 18040.)
+1. **No redirect capture on Android or web.** `platformRedirectUri()` names a per-target Redirect URI, but Android has
+   no intent filter and web has no callback route. (The `LOOPBACK_REDIRECT_URI` this originally described has since been
+   replaced by `DESKTOP_REDIRECT_URI` on port 18040, and desktop now captures the redirect for real — see
+   `LoopbackRedirectListener`.)
 2. **The PKCE verifier is only in memory.** `MalLoginViewModel.authRequest` is a `mutableStateOf`. It survives an
    Android configuration change — but *not* Android process death while the user is in the browser, and *not* a web
    full-page redirect. Both are on the happy path of a redirect flow, so this is the single biggest correctness gap.

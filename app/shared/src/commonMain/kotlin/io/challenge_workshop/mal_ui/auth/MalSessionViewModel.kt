@@ -118,9 +118,10 @@ class MalSessionViewModel(
      * Nothing here logs the URL: under `plain` PKCE the code verifier travels inside it.
      *
      * The stretch from the click to [AuthRedirectChannel.open] must not really suspend — a web popup
-     * loses its user activation if it does, and WebKit's window is 1 second. `arm` and
-     * `beginAuthorization` are `suspend` but complete without dispatching on every target today; a web
-     * channel that cannot rely on that has to open `about:blank` and set `location.href` afterwards.
+     * loses its user activation if it does, and WebKit's window is 1 second. That is no longer
+     * something a channel can rely on: desktop's `arm` binds a socket on `Dispatchers.IO` and so
+     * genuinely dispatches. A web channel therefore has to open `about:blank` synchronously and set
+     * `location.href` afterwards rather than assume this stretch runs straight through.
      */
     fun signIn(channel: AuthRedirectChannel, openUri: (String) -> Unit) {
         if (!canStart) return

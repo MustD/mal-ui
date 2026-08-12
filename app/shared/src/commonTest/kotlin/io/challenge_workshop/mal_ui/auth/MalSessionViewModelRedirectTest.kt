@@ -27,6 +27,7 @@ import kotlinx.coroutines.test.setMain
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -163,6 +164,26 @@ class MalSessionViewModelRedirectTest {
         assertEquals("the listener died", viewModel.error)
         // Still `Authorizing`, because the user is away on MAL and can paste what they land on.
         assertTrue(repository.state.value is SessionState.Authorizing, "${repository.state.value}")
+    }
+
+    /**
+     * The desktop listener gives up after five minutes and reports [AuthRedirectResult.Unsupported]
+     * rather than a failure. Nothing has gone wrong — the user was slow — so this must land on
+     * Paste-the-code silently, with no error card and the Pending Authorization intact.
+     */
+    @Test
+    fun a_capture_that_gives_up_falls_back_to_paste_the_code_without_an_error() = redirectTest {
+        viewModel.signIn(
+            RecordingAuthRedirectChannel(awaitResult = AuthRedirectResult.Unsupported),
+        )
+        settle()
+
+        assertNull(viewModel.error, "A capture that timed out is not something to apologise for.")
+        assertTrue(repository.state.value is SessionState.Authorizing, "${repository.state.value}")
+        // The URL and the paste field are both on the `Authorizing` screen, and completing by hand
+        // has to still work — the authorization itself was never touched.
+        assertNotNull(store.readPending())
+        assertFalse(viewModel.busy, "The paste field and Complete button are gated on `busy`.")
     }
 
     @Test

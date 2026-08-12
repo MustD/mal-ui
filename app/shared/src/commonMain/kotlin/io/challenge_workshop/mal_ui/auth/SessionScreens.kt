@@ -26,8 +26,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.challenge_workshop.mal_ui.session.SessionState
@@ -133,13 +135,26 @@ fun AuthorizingScreen(
         )
         LinearProgressIndicator(Modifier.fillMaxWidth())
 
+        val authorizationUrl = viewModel.authorizationUrlFor(state.pending)
+        @Suppress("DEPRECATION")
+        // `LocalClipboard` supersedes this, but its `ClipEntry` has no common constructor from text
+        // in Compose 1.11 — a copy button through it would need three actuals to write a string.
+        val clipboard = LocalClipboardManager.current
         OutlinedTextField(
-            value = viewModel.authorizationUrlFor(state.pending),
+            value = authorizationUrl,
             onValueChange = {},
             readOnly = true,
             label = { Text("Authorization URL") },
             modifier = Modifier.fillMaxWidth(),
-            supportingText = { Text("Didn't open? Select this and paste it into a browser.") },
+            supportingText = { Text("Didn't open? Copy this and paste it into a browser.") },
+            // Selecting a long URL out of a text field by hand is exactly the friction that makes
+            // people give up on the fallback, and the fallback is the only mechanism that always
+            // works. Never logged: under `plain` PKCE the code verifier is inside this string.
+            trailingIcon = {
+                TextButton(onClick = { clipboard.setText(AnnotatedString(authorizationUrl)) }) {
+                    Text("Copy")
+                }
+            },
         )
 
         HorizontalDivider()
