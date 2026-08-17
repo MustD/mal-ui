@@ -4,7 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>mal_ui</title>
-  <link type="text/css" rel="stylesheet" href="styles.css">
+  <!--
+    Root-absolute, not relative: this same page is also served for /oauth/callback, where a relative
+    href resolves against /oauth/ and 404s, leaving the spinner below on screen forever.
+  -->
+  <link type="text/css" rel="stylesheet" href="/styles.css">
 </head>
 <body style="text-align: center; align-content: center">
 <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 50 50" role="presentation">
@@ -15,6 +19,8 @@
                       repeatCount="indefinite"/>
   </circle>
 </svg>
-<script type="application/javascript" src="webApp.js"></script>
+<!-- Both the js and the wasmJs build emit this filename, which is what lets one page serve both.
+     Root-absolute for the same reason as the stylesheet above. -->
+<script type="application/javascript" src="/webApp.js"></script>
 </body>
 </html>

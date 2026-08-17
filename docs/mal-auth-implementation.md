@@ -671,8 +671,15 @@ Non-obvious detail worth a code comment: `connect-history-api-fallback` does
 `?code=…`, so `window.location.search` is intact. It also only rewrites `GET`/`HEAD` with an HTML-ish `Accept`, and
 skips paths whose last segment contains a dot, so keep the path extension-less (`/oauth/callback`, not`/callback.html`).
 
-The reverse proxy needs the equivalent: `/mal` → `127.0.0.1:18010` declared first, then
-`try_files {path} /index.html` for the SPA.
+The reverse proxy needs `/mal` → `127.0.0.1:18010` matched **first**, or `/mal/...` falls through to the dev server and
+comes back as `index.html`. It does **not** need a `try_files` of its own while it forwards to the dev server, which is
+where the fallback happens `[verified: all four origins serve the app at /oauth/callback?code=…]` — that line is only
+needed if the app is ever served from a static bundle instead.
+
+One more thing the fallback exposes: `index.html` must reference its assets **root-absolutely**. Served at
+`/oauth/callback`, a relative `src="webApp.js"` resolves to `/oauth/webApp.js`, which the dot rule above answers with a
+404 — the page renders its loading spinner and the app never boots. Not visible from `curl`, which sees a 200 and the
+right HTML `[verified in a headless browser, on both targets and both proxy hostnames]`.
 
 ---
 

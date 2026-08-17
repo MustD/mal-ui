@@ -45,12 +45,28 @@ listener uses `com.sun.net.httpserver`, which is why `:app:desktopApp` declares
 only shows up in a packaged build.
 
 The two web targets have separate ports so both can run at once. Ports are set per target in
-`app/webApp/build.gradle.kts`; everything shared by both (host binding, `allowedHosts`, the `/mal` proxy) is in
-`app/webApp/webpack.config.d/devserver.js`.
+`app/webApp/build.gradle.kts`; everything shared by both (host binding, `allowedHosts`, the `/mal` proxy, and the
+`historyApiFallback` that serves the app on `/oauth/callback`) is in `app/webApp/webpack.config.d/devserver.js`.
 
 Optionally reachable as `https://mal-ui.localhost` (wasmJs) and `https://js.mal-ui.localhost`
 (js) through a local reverse proxy that routes `/mal` to 18010 and everything else to the dev server. Same-origin
-routing is required, not cosmetic — see below.
+routing is required, not cosmetic — see below. That config lives outside this repo; in Caddy terms it is:
+
+```caddyfile
+mal-ui.localhost {
+	handle /mal /mal/* {       # first, so the relay is never swallowed by the SPA fallback below
+		reverse_proxy 127.0.0.1:18010
+	}
+	handle {
+		reverse_proxy 127.0.0.1:18020   # 18030 for js.mal-ui.localhost
+	}
+}
+```
+
+The dev server's own `historyApiFallback` covers the SPA deep link on both paths, so the proxy needs no `try_files` of
+its own — but it does need `/mal` matched **first**, or `/mal/...` reaches the dev server and comes back as
+`index.html`. If the app is ever served from a static bundle instead of the dev server, that side needs
+`try_files {path} /index.html` added.
 
 Tests — there is no single aggregate target that covers everything; each platform has its own task:
 
@@ -137,7 +153,11 @@ Assets go in `app/shared/src/commonMain/composeResources/<qualifier>/` and are r
 
 ### Web hosting page
 
-`app/webApp/src/webMain/resources/index.html` hardcodes `<script src="webApp.js">`. Both the JS and Wasm builds emit that filename, so the same page serves both targets.
+`app/webApp/src/webMain/resources/index.html` hardcodes `<script src="/webApp.js">`. Both the JS and Wasm builds emit that filename, so the same page serves both targets.
+
+The leading slash is load-bearing: the same page is served for `/oauth/callback` by the dev server's
+`historyApiFallback`, and a relative `webApp.js` there resolves to `/oauth/webApp.js`, which 404s — the page renders its
+loading spinner and the app never boots. `curl` cannot see this; it gets a 200 and the right HTML.
 
 ## Conventions
 

@@ -25,4 +25,25 @@ if (config.devServer) {
             target: 'http://127.0.0.1:18010',
         },
     ];
+
+    // Serve index.html for the OAuth callback deep link, so /oauth/callback?code=... boots the SPA
+    // instead of 404ing. `historyApiFallback` defaults to false and Kotlin's DevServer DSL does not
+    // expose it, which is why it is set here rather than in build.gradle.kts.
+    //
+    // Middleware order is host-header-check -> cross-origin-header-check -> proxy -> dev-middleware
+    // -> static -> connect-history-api-fallback, so /mal is claimed by the proxy above long before
+    // the fallback sees it, and the fallback only catches what nothing else served.
+    //
+    // Two behaviours of connect-history-api-fallback that look like bugs otherwise:
+    //   - It rewrites `req.url` to `options.index`, DISCARDING the query string. That is server-side
+    //     only: the address bar still carries ?code=..., so window.location.search is intact and
+    //     `currentSearch()` in :app:shared/webMain reads it fine.
+    //   - It only rewrites GET/HEAD with an HTML-ish Accept, and skips any path whose last segment
+    //     contains a dot (`disableDotRule: false` keeps that rule on, which is what stops a missing
+    //     webApp.js from being answered with index.html). So the callback path must stay
+    //     extension-less: /oauth/callback, never /callback.html.
+    config.devServer.historyApiFallback = {
+        index: '/index.html',
+        disableDotRule: false,
+    };
 }
