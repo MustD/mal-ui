@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The same exclusion for API 30 and below, where `android:dataExtractionRules` is ignored.
+
+  `allowBackup="false"` already disables every form of backup on those releases, so this changes
+  nothing today: it is here so the store stays excluded if that flag is ever turned back on, and
+  because lint rightly refuses to accept extraction rules that only cover half the supported range.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="io.challenge_workshop.mal_ui.xml"/>
+</full-backup-content>

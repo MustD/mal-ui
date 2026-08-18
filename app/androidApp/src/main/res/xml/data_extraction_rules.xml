@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Keeps the token store out of cloud backup and out of device-to-device transfer, which on API 31+ is
+  governed by this file alone and ignores `allowBackup` — see CLAUDE.md.
+
+  The path is the `SharedPreferences` file `AndroidKeyValueStore` opens: MAL_STORE_NAMESPACE + ".xml".
+  `AndroidManifestTest` asserts the two agree.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="io.challenge_workshop.mal_ui.xml"/>
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="io.challenge_workshop.mal_ui.xml"/>
+    </device-transfer>
+</data-extraction-rules>

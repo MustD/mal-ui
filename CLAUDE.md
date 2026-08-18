@@ -75,6 +75,7 @@ Tests — there is no single aggregate target that covers everything; each platf
 ./gradlew :app:shared:jvmTest               # jvmTest + commonTest
 ./gradlew :app:shared:wasmJsTest            # webTest + commonTest
 ./gradlew :app:shared:jsTest                # webTest + commonTest
+./gradlew :app:androidApp:testDebugUnitTest # the manifest drift guard, and nothing else
 ./gradlew :server:test
 ./gradlew build                             # everything
 ```
@@ -176,6 +177,27 @@ The web Redirect Capture is a popup that `postMessage`s the redirect back to `wi
   if it answers true. A `window.open`ed document gets its **own copy** of `sessionStorage`, not a shared view, so a
   popup that started the app would exchange the code against its own copy and clear a Pending Authorization the opener
   would never see cleared.
+
+### Android sign-in: the manifest is load-bearing
+
+Four things in `app/androidApp/src/main/AndroidManifest.xml` are each a silent failure if lost, so
+`AndroidManifestTest` — the only test in that module — asserts all four:
+
+- **`launchMode="singleTop"`.** Under `standard` the redirect Intent starts a *second* `MainActivity` with its own
+  `ViewModelStore`, so the instance that receives the code is not the one holding the Pending Authorization. Nothing
+  throws; the redirect simply does nothing. `singleTask`/`singleInstance` avoid that too, at the price of
+  task-management surprises.
+- **The custom-scheme intent filter** must stay byte-identical to `ANDROID_REDIRECT_URI` in `:core`, which MAL compares
+  byte-exactly. It is spread over three attributes (`scheme` / `host` / `path`) there and one string in Kotlin, which is
+  exactly how the two drift.
+- **`<queries>`.** Without it, on API 30+ `CustomTabsClient.getPackageName()` and `isAuthTabSupported()` see no browsers
+  at all — the `androidx.browser` AAR ships none of its own — and sign-in quietly degrades to Paste-the-code.
+- **`allowBackup="false"`, plus the two rules files.** Auto Backup would copy the refresh token to the cloud.
+  `allowBackup` covers cloud backup; device-to-device transfer on API 31+ is governed by
+  `res/xml/data_extraction_rules.xml` alone and ignores that flag; and below API 31 those rules are ignored in turn and
+  `res/xml/backup_rules.xml` (`android:fullBackupContent`) is what would count. So the `SharedPreferences` file
+  (`MAL_STORE_NAMESPACE` + `.xml`) is named in all three places. The app therefore does not participate in backup at all
+  — deliberate, since the only thing worth backing up is the one thing that must not be.
 
 ## Conventions
 

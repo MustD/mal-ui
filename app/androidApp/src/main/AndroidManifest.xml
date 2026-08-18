@@ -3,21 +3,63 @@
 
     <uses-permission android:name="android.permission.INTERNET"/>
 
+    <!--
+      Package visibility for the browser, required from API 30 on and a silent failure without it —
+      see CLAUDE.md. The second entry is the generic "can open https" query that
+      CustomTabsClient.getPackageName() ranks its candidates from.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <category android:name="android.intent.category.BROWSABLE"/>
+            <data android:scheme="https"/>
+        </intent>
+    </queries>
+
     <application
             android:name="io.challenge_workshop.mal_ui.MalUiApplication"
-            android:allowBackup="true"
+            android:allowBackup="false"
+            android:dataExtractionRules="@xml/data_extraction_rules"
+            android:fullBackupContent="@xml/backup_rules"
             android:icon="@mipmap/ic_launcher"
             android:label="@string/app_name"
             android:roundIcon="@mipmap/ic_launcher_round"
             android:supportsRtl="true"
             android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <!--
+          singleTop, not standard: under `standard` the redirect Intent starts a *second*
+          MainActivity with its own ViewModelStore, and the redirect then reaches an instance that is
+          not holding the Pending Authorization — see CLAUDE.md. singleTask/singleInstance would also
+          avoid the second instance, at the price of task-management grief they are a documented
+          source of.
+        -->
         <activity
                 android:exported="true"
+                android:launchMode="singleTop"
                 android:name=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
 
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!--
+              The Redirect Capture filter. Must stay byte-identical to ANDROID_REDIRECT_URI in
+              `:core`, which is what MAL compares and what the authorization request sends;
+              `AndroidManifestTest` is the guard against the two drifting.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+
+                <data
+                        android:host="oauth"
+                        android:path="/callback"
+                        android:scheme="io.challenge-workshop.malui"/>
             </intent-filter>
         </activity>
     </application>

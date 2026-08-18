@@ -17,6 +17,12 @@ dependencies {
 
     implementation(libs.compose.uiToolingPreview)
     debugImplementation(libs.compose.uiTooling)
+
+    // Only the manifest drift guard — see `AndroidManifestTest`. Robolectric because the facts it
+    // asserts (intent-filter matching, launch mode, the backup flag) are properties of the *merged*
+    // manifest as Android parses it, not of the XML in this module.
+    testImplementation(libs.kotlin.testJunit)
+    testImplementation(libs.robolectric)
 }
 
 android {
@@ -29,6 +35,10 @@ android {
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = 1
         versionName = "1.0"
+    }
+    testOptions {
+        // Robolectric needs the merged manifest and the compiled resources.
+        unitTests.isIncludeAndroidResources = true
     }
     packaging {
         resources {
