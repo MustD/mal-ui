@@ -83,13 +83,12 @@ interface AuthRedirectChannel {
 }
 
 /**
- * The channel that captures nothing, and Android's actual until ticket 16 replaces it.
+ * The channel that captures nothing.
  *
- * Not a stub: [ArmResult.Unsupported] is a modelled path that stays reachable on every platform
- * forever — headless desktop, a blocked popup, no Custom-Tabs browser — and Paste-the-code is the only
- * mechanism that works in all of them. It is also the only one that is already tested end to end, so
- * having every target start here means the platform channels land on a working login rather than
- * alongside one.
+ * No longer any target's actual — all three build a real one now — but not dead either:
+ * [ArmResult.Unsupported] is a modelled answer that every one of those three can still give, and
+ * this is what that answer *is*. Keeping it named and tested keeps the contract's "no capture here"
+ * branch exercised without a platform that has to be in a broken state to produce it.
  */
 object PasteOnlyRedirectChannel : AuthRedirectChannel {
 

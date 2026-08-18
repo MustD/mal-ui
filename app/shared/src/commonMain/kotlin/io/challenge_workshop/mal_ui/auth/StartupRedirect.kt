@@ -30,7 +30,11 @@ fun interface StartupRedirect {
     suspend fun consume(): String?
 
     companion object {
-        /** Desktop and Android: a redirect always arrives at a running process, never at a launch. */
+        /**
+         * Desktop: a loopback redirect can only reach a process that is already listening for it,
+         * so there is never one to answer at startup. Android has its own — a redirect *does*
+         * launch a process there, when the last one was killed behind the browser.
+         */
         val None: StartupRedirect = StartupRedirect { null }
     }
 }

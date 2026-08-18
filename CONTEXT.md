@@ -34,6 +34,11 @@ One is registered per platform and per web origin. _Avoid_: Redirect URL, callba
 "URL"; the wire parameter and this codebase say
 `redirect_uri`)
 
+**Redirect Inbox**:
+Android only: the process-scoped hand-off that holds a redirect `Intent`'s URI until something takes it — an armed
+Redirect Capture, or the launch path when the process was killed while the user was away. In code it is
+`AuthRedirectInbox`. Deliberately not called a relay; see **Relay**, which is a different thing entirely.
+
 **Signed Out Reason**:
 Why a Session is absent — never signed in, signed out deliberately, a refresh MAL rejected, or an authorization that
 failed. Carried so the UI can explain itself rather than showing a bare "signed out".

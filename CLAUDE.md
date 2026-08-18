@@ -105,9 +105,10 @@ is correct for a public client.
 The Client ID is entered at runtime so no real one is committed.
 
 Each target captures the redirect itself (`AuthRedirectChannel` in `:app:shared/auth`): desktop on a loopback listener,
-web in a popup. **Paste-the-code is not dead code** — it is the modelled fallback for a headless desktop, a blocked
+web in a popup, Android on the manifest's custom-scheme intent filter (ticket 16 adds an Auth Tab in front of that and
+races the two). **Paste-the-code is not dead code** — it is the modelled fallback for a headless desktop, a blocked
 popup or a missing Custom-Tabs browser, and it is the path every capture funnels into, so there is one parser and one
-set of error messages. Android is still on it pending ticket 16.
+set of error messages.
 
 **Web needs the relay, on the same origin.** MAL sends no CORS headers on its token or API endpoints and answers
 preflight `OPTIONS` with 405, so a browser cannot call them at all.
@@ -139,6 +140,8 @@ Two tiers of shared code, deliberately separated:
 - **`:app:shared`** — Compose Multiplatform UI plus platform abstractions. Exposes `:core` via `api(project(":core"))`, so app modules get `:core`'s API transitively.
 
 The three client modules (`:app:androidApp`, `:app:desktopApp`, `:app:webApp`) are thin entry points only: each has a `main`/`Activity` that sets up its platform's window and calls the single `App()` composable from `:app:shared`. Put UI in `:app:shared`, not in the app modules.
+
+The two additions to that are both sign-in plumbing that only an entry point can do, and both forward immediately into `:app:shared` rather than deciding anything: `MainActivity.onCreate`/`onNewIntent` hand the redirect Intent to `AuthRedirectInbox`, and web's `main()` relays a popup's redirect to its opener before Koin starts. Neither is a place to add behaviour.
 
 `:server` is a standalone Ktor/Netty app (`Application.kt`) that shares only `:core`.
 
@@ -177,6 +180,32 @@ The web Redirect Capture is a popup that `postMessage`s the redirect back to `wi
   if it answers true. A `window.open`ed document gets its **own copy** of `sessionStorage`, not a shared view, so a
   popup that started the app would exchange the code against its own copy and clear a Pending Authorization the opener
   would never see cleared.
+
+### Android sign-in: the redirect arrives at an Activity, not at a channel
+
+A custom-scheme redirect lands on `MainActivity` and nowhere else, so it forwards it to `AuthRedirectInbox.Shared` —
+a process-scoped `MutableSharedFlow(replay = 1)` — and does nothing else with it. Everything with an opinion about a
+redirect sits above `MainActivity` and outlives it. (An *inbox*, not a relay: `Relay` in this project means the `/mal`
+routes on `:server`, and nothing here forwards anything to MAL.)
+
+- **`replay = 1` is load-bearing.** `onNewIntent` runs before `onResume`, and on a cold start the Intent is in hand
+  before Koin has built a ViewModel, so a redirect is routinely delivered before anything is collecting. Without the
+  replay it is dropped and the sign-in hangs with no error anywhere.
+- **Two things take from the inbox, and only one of them always exists.** `IntentRedirectChannel` when a sign-in is
+  live, filtering by `state` because the filter is exported and any app can fire that Intent. `AndroidStartupRedirect`
+  when the process was *killed* behind the browser — ordinary on a low-RAM device — and the redirect relaunches the
+  app: no armed channel, no `state` in memory, only the persisted Pending Authorization, which is why that record is
+  written before the browser opens.
+- **`intent.data` is nulled on delivery.** `setIntent()` hands the same object to a later recreation, and an
+  authorization code is single-use.
+- **Cancellation is a heuristic and must stay non-destructive.** There is no cancellation API without Auth Tab, so a
+  resume that follows a stop is treated as backing out. The `ON_STOP` requirement is what stops the *first* `onResume`
+  — which fires before the browser is on top — cancelling every sign-in at the moment it starts; a call, a
+  notification or a configuration change still read as cancellations. So `Cancelled` only re-enables the button, and
+  `MalSessionRepository.cancelAuthorization` keeps the Pending Authorization. A redirect already delivered wins over a
+  suspected cancellation without a grace window, because `onNewIntent` precedes `onResume`. The signal is
+  `Lifecycle.currentStateFlow`, not `eventFlow`: the capture only subscribes after the browser has been launched, and
+  a `StateFlow` still tells a late subscriber that the Activity is off screen.
 
 ### Android sign-in: the manifest is load-bearing
 

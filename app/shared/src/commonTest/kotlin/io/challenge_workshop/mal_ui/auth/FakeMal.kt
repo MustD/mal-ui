@@ -6,6 +6,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.respondError
+import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
@@ -23,8 +24,13 @@ internal const val FAKE_MAL_API_BASE_URL: String = "https://mal.test/v2"
 
 internal val FAKE_MAL_USER: MalUser = MalUser(id = 42, name = "someone")
 
-internal fun fakeMal(): HttpClientFactory {
+/**
+ * @param onRequest every request, before it is answered. For counting: "did that redirect produce a
+ * second token exchange" is otherwise only inferable from a downstream error.
+ */
+internal fun fakeMal(onRequest: (HttpRequestData) -> Unit = {}): HttpClientFactory {
     val engine = MockEngine { request ->
+        onRequest(request)
         val json = headersOf(HttpHeaders.ContentType, "application/json")
         when {
             request.url.toString().startsWith(FAKE_MAL_TOKEN_ENDPOINT) -> respond(

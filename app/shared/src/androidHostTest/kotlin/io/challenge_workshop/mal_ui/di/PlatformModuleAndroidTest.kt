@@ -1,5 +1,6 @@
 package io.challenge_workshop.mal_ui.di
 
+import io.challenge_workshop.mal_ui.auth.AndroidStartupRedirect
 import io.challenge_workshop.mal_ui.auth.StartupRedirect
 import io.challenge_workshop.mal_ui.session.AndroidKeyValueStore
 import io.challenge_workshop.mal_ui.session.KeyValueStore
@@ -12,7 +13,6 @@ import org.robolectric.RuntimeEnvironment
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertIs
-import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -27,9 +27,10 @@ class PlatformModuleAndroidTest {
         val koin = initKoin { androidContext(RuntimeEnvironment.getApplication()) }.koin
 
         assertIs<AndroidKeyValueStore>(koin.get<KeyValueStore>())
-        // A redirect reaches Android as an Intent on a running Activity, never as a launch this
-        // layer can read — but the binding still has to exist or the ViewModel does not resolve.
-        assertSame(StartupRedirect.None, koin.get<StartupRedirect>())
+        // A redirect normally reaches a running Activity and goes to the armed channel. It reaches
+        // a *launch* when the process was killed while the user was away on myanimelist.net, and
+        // then this binding is the only thing left that can deliver it.
+        assertIs<AndroidStartupRedirect>(koin.get<StartupRedirect>())
 
         koin.get<MalSessionRepository>().close()
     }
