@@ -1,6 +1,7 @@
 package io.challenge_workshop.mal_ui.di
 
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
+import io.challenge_workshop.mal_ui.auth.StartupRedirect
 import io.challenge_workshop.mal_ui.mal.HttpClientFactory
 import io.challenge_workshop.mal_ui.mal.MalAuthConfig
 import io.challenge_workshop.mal_ui.session.JsonTokenStore
@@ -44,11 +45,12 @@ val appModule: Module = module {
     // Resolved with `koinViewModel()` from `App()`. A `viewModel` rather than a `single`, so it is
     // scoped to the composition's ViewModelStore like any other ViewModel; everything durable it
     // touches lives in the repository singleton above, so being recreated costs nothing.
-    viewModel { MalSessionViewModel(repository = get()) }
+    viewModel { MalSessionViewModel(repository = get(), startupRedirect = get()) }
 }
 
 /**
- * The per-target half of the graph: whatever `KeyValueStore` this platform can actually open.
+ * The per-target half of the graph: whatever `KeyValueStore` this platform can actually open, and
+ * whichever [StartupRedirect] it can be launched with.
  *
  * A `Module` rather than a `expect fun platformKeyValueStore(namespace)` because the Android
  * implementation needs a `Context`, and a Koin definition is the one place that reliably has one.

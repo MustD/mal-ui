@@ -22,6 +22,7 @@ import androidx.compose.ui.text.AnnotatedString
 import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListener
 import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListenerTest
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
+import io.challenge_workshop.mal_ui.auth.StartupRedirect
 import io.challenge_workshop.mal_ui.auth.awaitLoopbackPortFree
 import io.challenge_workshop.mal_ui.auth.SIGNED_OUT_REASON_TAG
 import io.challenge_workshop.mal_ui.auth.SessionScreenTag
@@ -72,7 +73,7 @@ class SessionRouteTest {
         Dispatchers.setMain(UnconfinedTestDispatcher())
         store = JsonTokenStore(FakeKeyValueStore())
         repository = MalSessionRepository(store, initialConfig = MalAuthConfig(clientId = "a-client-id"))
-        viewModel = MalSessionViewModel(repository)
+        viewModel = MalSessionViewModel(repository, StartupRedirect.None)
     }
 
     @AfterTest

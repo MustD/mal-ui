@@ -101,8 +101,12 @@ MAL supports `code_challenge_method=plain` only, so the PKCE challenge equals th
 Register the app at myanimelist.net/apiconfig with **App Type `other`** — that issues a Client ID and no secret, which
 is correct for a public client.
 
-The login screen (`:app:shared`, `auth/`) uses a paste-the-code flow: it opens MAL in a browser, the user approves, and
-pastes the resulting redirect URL back in. Credentials are entered at runtime so no real Client ID is committed.
+The Client ID is entered at runtime so no real one is committed.
+
+Each target captures the redirect itself (`AuthRedirectChannel` in `:app:shared/auth`): desktop on a loopback listener,
+web in a popup. **Paste-the-code is not dead code** — it is the modelled fallback for a headless desktop, a blocked
+popup or a missing Custom-Tabs browser, and it is the path every capture funnels into, so there is one parser and one
+set of error messages. Android is still on it pending ticket 16.
 
 **Web needs the relay, on the same origin.** MAL sends no CORS headers on its token or API endpoints and answers
 preflight `OPTIONS` with 405, so a browser cannot call them at all.
@@ -158,6 +162,20 @@ Assets go in `app/shared/src/commonMain/composeResources/<qualifier>/` and are r
 The leading slash is load-bearing: the same page is served for `/oauth/callback` by the dev server's
 `historyApiFallback`, and a relative `webApp.js` there resolves to `/oauth/webApp.js`, which 404s — the page renders its
 loading spinner and the app never boots. `curl` cannot see this; it gets a 200 and the right HTML.
+
+### Web sign-in: the popup, and two things that must not change
+
+The web Redirect Capture is a popup that `postMessage`s the redirect back to `window.opener`
+(`PopupRedirectChannel`), falling back to a full-page redirect when the browser blocks it and then to Paste-the-code.
+
+- **Never set `Cross-Origin-Opener-Policy: same-origin`** on the dev server, `:server`, or the reverse proxy. It severs
+  `window.opener` when the popup navigates to myanimelist.net, and the login then hangs with no error anywhere. Nothing
+  sets COOP today, which is what makes the popup possible at all; `same-origin-allow-popups` is the value to use if
+  cross-origin isolation is ever needed.
+- **The popup must not boot the app.** `main()` calls `relaySignInRedirectToOpener()` *before* `initKoin()` and returns
+  if it answers true. A `window.open`ed document gets its **own copy** of `sessionStorage`, not a shared view, so a
+  popup that started the app would exchange the code against its own copy and clear a Pending Authorization the opener
+  would never see cleared.
 
 ## Conventions
 

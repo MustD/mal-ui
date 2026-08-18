@@ -2,6 +2,7 @@
 
 package io.challenge_workshop.mal_ui.auth
 
+import io.ktor.http.parseQueryString
 import kotlin.js.ExperimentalWasmJsInterop
 
 /**
@@ -25,6 +26,24 @@ import kotlin.js.ExperimentalWasmJsInterop
  * the popup path never reloads the document at all.
  */
 internal fun currentSearch(): String = js("window.location.search")
+
+/** This document's origin — scheme, host and port, the exact string `postMessage` compares. */
+internal fun currentOrigin(): String = js("window.location.origin")
+
+/** The whole address, which is what both Redirect Capture paths hand on unparsed. */
+internal fun currentHref(): String = js("window.location.href")
+
+/**
+ * Whether [search] is a redirect from MyAnimeList rather than an ordinary visit.
+ *
+ * `error` counts: a denial has to reach the app as the same [io.challenge_workshop.mal_ui.mal.MalAuthException]
+ * a pasted denial would, and a popup that stayed silent on one would leave its opener waiting.
+ *
+ * Deliberately not `parseRedirect` — that one throws to say "no code here", which is the right
+ * answer for a paste and the wrong one for a page load that simply is not a redirect.
+ */
+internal fun carriesAuthRedirect(search: String): Boolean =
+    parseQueryString(search.removePrefix("?")).let { it.contains("code") || it.contains("error") }
 
 /**
  * Drops the query from the address bar, keeping the path and the fragment.

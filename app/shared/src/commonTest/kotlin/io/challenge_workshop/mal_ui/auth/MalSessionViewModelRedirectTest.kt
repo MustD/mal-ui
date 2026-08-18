@@ -4,18 +4,10 @@ package io.challenge_workshop.mal_ui.auth
 
 import io.challenge_workshop.mal_ui.mal.HttpClientFactory
 import io.challenge_workshop.mal_ui.mal.MalAuthConfig
-import io.challenge_workshop.mal_ui.mal.MalUser
 import io.challenge_workshop.mal_ui.session.FakeKeyValueStore
 import io.challenge_workshop.mal_ui.session.JsonTokenStore
 import io.challenge_workshop.mal_ui.session.MalSessionRepository
 import io.challenge_workshop.mal_ui.session.SessionState
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.mock.MockEngine
-import io.ktor.client.engine.mock.respond
-import io.ktor.client.engine.mock.respondError
-import io.ktor.http.HttpHeaders
-import io.ktor.http.HttpStatusCode
-import io.ktor.http.headersOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
@@ -32,11 +24,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-private const val TEST_TOKEN_ENDPOINT = "https://mal.test/v1/oauth2/token"
-private const val TEST_API_BASE_URL = "https://mal.test/v2"
+/** Desktop's, because the loopback listener is the channel these paths were written against. */
 private const val TEST_REDIRECT_URI = "http://127.0.0.1:18040/oauth/callback"
-
-private val TEST_USER = MalUser(id = 42, name = "someone")
 
 /**
  * What [MalSessionViewModel] does with an [AuthRedirectChannel].
@@ -74,7 +63,7 @@ class MalSessionViewModelRedirectTest {
         viewModel.onPastedRedirectChange("$TEST_REDIRECT_URI?code=the-code&state=${pending.state}")
         viewModel.completeSignIn()
 
-        assertEquals(SessionState.SignedIn(TEST_USER), awaitSettledSession())
+        assertEquals(SessionState.SignedIn(FAKE_MAL_USER), awaitSettledSession())
     }
 
     @Test
@@ -95,7 +84,7 @@ class MalSessionViewModelRedirectTest {
             AuthRedirectResult.Received("$TEST_REDIRECT_URI?code=the-code&state=${pending.state}"),
         )
 
-        assertEquals(SessionState.SignedIn(TEST_USER), awaitSettledSession())
+        assertEquals(SessionState.SignedIn(FAKE_MAL_USER), awaitSettledSession())
     }
 
     @Test
@@ -107,7 +96,7 @@ class MalSessionViewModelRedirectTest {
 
         viewModel.completeSignIn("$TEST_REDIRECT_URI?code=the-code&state=${pending.state}")
 
-        assertEquals(SessionState.SignedIn(TEST_USER), awaitSettledSession())
+        assertEquals(SessionState.SignedIn(FAKE_MAL_USER), awaitSettledSession())
         // Times out rather than returning if the channel is left listening — which on desktop means a
         // bound 18040 that the next sign-in cannot rebind.
         channel.awaitRelease()
@@ -216,12 +205,12 @@ class MalSessionViewModelRedirectTest {
             initialConfig = MalAuthConfig(
                 clientId = "a-client-id",
                 redirectUri = TEST_REDIRECT_URI,
-                tokenEndpoint = TEST_TOKEN_ENDPOINT,
-                apiBaseUrl = TEST_API_BASE_URL,
+                tokenEndpoint = FAKE_MAL_TOKEN_ENDPOINT,
+                apiBaseUrl = FAKE_MAL_API_BASE_URL,
             ),
             clientFactory = fakeMal(),
         )
-        val viewModel = MalSessionViewModel(repository)
+        val viewModel = MalSessionViewModel(repository, StartupRedirect.None)
 
         /** Runs everything `viewModelScope` has outstanding. */
         fun settle() = scope.advanceUntilIdle()
@@ -257,26 +246,3 @@ class MalSessionViewModelRedirectTest {
     }
 }
 
-/** Answers the token exchange and `/users/@me`, and nothing else. */
-private fun fakeMal(): HttpClientFactory {
-    val engine = MockEngine { request ->
-        val json = headersOf(HttpHeaders.ContentType, "application/json")
-        when {
-            request.url.toString().startsWith(TEST_TOKEN_ENDPOINT) -> respond(
-                content = """{"token_type":"Bearer","expires_in":2415600,""" +
-                    """"access_token":"an-access-token","refresh_token":"a-refresh-token"}""",
-                status = HttpStatusCode.OK,
-                headers = json,
-            )
-
-            request.url.encodedPath.endsWith("/users/@me") -> respond(
-                content = """{"id":42,"name":"someone"}""",
-                status = HttpStatusCode.OK,
-                headers = json,
-            )
-
-            else -> respondError(HttpStatusCode.NotFound, "unexpected ${request.url}")
-        }
-    }
-    return HttpClientFactory { configure -> HttpClient(engine) { configure() } }
-}

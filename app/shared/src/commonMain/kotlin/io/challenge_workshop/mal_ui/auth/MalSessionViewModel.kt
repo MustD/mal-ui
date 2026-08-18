@@ -28,6 +28,7 @@ import kotlin.coroutines.cancellation.CancellationException
  */
 class MalSessionViewModel(
     private val repository: MalSessionRepository,
+    private val startupRedirect: StartupRedirect,
 ) : ViewModel() {
 
     val state: StateFlow<SessionState> = repository.state
@@ -91,7 +92,17 @@ class MalSessionViewModel(
         // Exactly once per process: the repository is a singleton, so a recreated ViewModel finds the
         // state already settled and leaves it alone.
         if (repository.state.value is SessionState.Restoring) {
-            viewModelScope.launch { repository.restore() }
+            launchGuarded {
+                repository.restore()
+                // Strictly after the store has been read. `restore` settles the state from what it
+                // finds there, so completing a redirect first would have its `SignedIn` overwritten
+                // a moment later by whatever the store said before the sign-in.
+                //
+                // Guarded like every other path, because the failures here are ones a user has to be
+                // told about: a code with no Pending Authorization to complete it, or a denial. The
+                // symptom of swallowing either is a sign-in button that appears to do nothing.
+                startupRedirect.consume()?.let { completeAuthorization(it) }
+            }
         }
     }
 
@@ -117,11 +128,14 @@ class MalSessionViewModel(
      *
      * Nothing here logs the URL: under `plain` PKCE the code verifier travels inside it.
      *
-     * The stretch from the click to [AuthRedirectChannel.open] must not really suspend — a web popup
-     * loses its user activation if it does, and WebKit's window is 1 second. That is no longer
-     * something a channel can rely on: desktop's `arm` binds a socket on `Dispatchers.IO` and so
-     * genuinely dispatches. A web channel therefore has to open `about:blank` synchronously and set
-     * `location.href` afterwards rather than assume this stretch runs straight through.
+     * The stretch from the click to [AuthRedirectChannel.open] must not really suspend on web — a
+     * popup loses its user activation if it does, and WebKit's window is 1 second. It currently does
+     * not: `viewModelScope` is `Dispatchers.Main.immediate`, and neither the web `arm` nor
+     * [MalSessionRepository.beginAuthorization] reaches a suspension point, so the popup opens before
+     * `signIn` returns. That is not obvious from reading this and is not something to assume —
+     * `PopupUserActivationTest` in `webTest` pins it against the production dispatcher on both
+     * browser targets. Desktop is the counter-example that shows how easily it goes: its `arm` binds
+     * a socket on `Dispatchers.IO` and genuinely dispatches.
      */
     fun signIn(channel: AuthRedirectChannel, openUri: (String) -> Unit) {
         if (!canStart) return

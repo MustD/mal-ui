@@ -80,12 +80,7 @@ class AuthRedirectQueryTest {
     }
 }
 
-private fun currentHref(): String = js("window.location.href")
-
-private fun currentPath(): String = js("window.location.pathname")
-
 private fun currentHash(): String = js("window.location.hash")
 
 private fun historyLength(): Int = js("window.history.length")
 
-private fun replaceUrl(url: String): Unit = js("window.history.replaceState(null, '', url)")

@@ -46,4 +46,13 @@ if (config.devServer) {
         index: '/index.html',
         disableDotRule: false,
     };
+
+    // DO NOT add Cross-Origin-Opener-Policy: same-origin here, or to :server, or to the reverse
+    // proxy. The sign-in Redirect Capture is a popup that posts the redirect back to
+    // `window.opener`, and COOP: same-origin severs that reference the moment the popup navigates
+    // to myanimelist.net — the popup completes, posts into nothing, and the login hangs with no
+    // error anywhere. Nothing sets COOP today (webpack-dev-server sends no such header, and MAL
+    // leaves it at the default `unsafe-none` on /, /login.php and /v1/oauth2/authorize), which is
+    // what makes the popup viable at all. If cross-origin isolation is ever needed, the value that
+    // preserves this is `same-origin-allow-popups`.
 }

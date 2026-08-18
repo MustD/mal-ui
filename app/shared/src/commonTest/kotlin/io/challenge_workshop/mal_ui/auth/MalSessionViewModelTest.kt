@@ -52,7 +52,7 @@ class MalSessionViewModelTest {
     fun nothing_the_ui_can_see_carries_a_token_a_code_or_a_verifier() = runTest {
         store.writeSession(MalTokens("Bearer", 2_415_600, ACCESS, REFRESH), MalUser(1, "someone"))
         store.writePending(VERIFIER, "the-state", "the-redirect", "the-client")
-        val viewModel = MalSessionViewModel(repository)
+        val viewModel = MalSessionViewModel(repository, StartupRedirect.None)
         viewModel.reloadDiagnostics()
 
         val exposed = listOf(
@@ -70,12 +70,12 @@ class MalSessionViewModelTest {
 
     @Test
     fun the_client_id_field_is_prefilled_from_the_build_time_default() {
-        assertEquals("prefilled", MalSessionViewModel(repository).clientId)
+        assertEquals("prefilled", MalSessionViewModel(repository, StartupRedirect.None).clientId)
     }
 
     @Test
     fun editing_the_client_id_reaches_the_repository_config() {
-        val viewModel = MalSessionViewModel(repository)
+        val viewModel = MalSessionViewModel(repository, StartupRedirect.None)
 
         viewModel.onClientIdChange("  typed-by-hand  ")
 
@@ -86,17 +86,17 @@ class MalSessionViewModelTest {
     fun the_view_model_restores_the_session_on_first_construction() = runTest {
         store.writeSession(MalTokens("Bearer", 2_415_600, ACCESS, REFRESH), MalUser(1, "someone"))
 
-        MalSessionViewModel(repository)
+        MalSessionViewModel(repository, StartupRedirect.None)
 
         assertEquals(SessionState.SignedIn(MalUser(1, "someone")), repository.state.value)
     }
 
     @Test
     fun a_second_view_model_does_not_re_run_the_restore() = runTest {
-        MalSessionViewModel(repository)
+        MalSessionViewModel(repository, StartupRedirect.None)
         repository.signOut()
 
-        MalSessionViewModel(repository)
+        MalSessionViewModel(repository, StartupRedirect.None)
 
         // A recreated ViewModel must not resurrect a Session the user just ended.
         assertTrue(repository.state.value is SessionState.SignedOut)
@@ -106,6 +106,7 @@ class MalSessionViewModelTest {
     fun signing_in_is_blocked_until_a_client_id_is_present() {
         val viewModel = MalSessionViewModel(
             MalSessionRepository(store, initialConfig = MalAuthConfig(clientId = "")),
+            StartupRedirect.None,
         )
 
         assertFalse(viewModel.canStart)

@@ -83,8 +83,7 @@ interface AuthRedirectChannel {
 }
 
 /**
- * The channel that captures nothing, and every target's actual until tickets 11, 13 and 16 replace them
- * one at a time.
+ * The channel that captures nothing, and Android's actual until ticket 16 replaces it.
  *
  * Not a stub: [ArmResult.Unsupported] is a modelled path that stays reachable on every platform
  * forever — headless desktop, a blocked popup, no Custom-Tabs browser — and Paste-the-code is the only
