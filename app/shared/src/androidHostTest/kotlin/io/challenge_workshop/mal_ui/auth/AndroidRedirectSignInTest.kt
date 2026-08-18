@@ -2,6 +2,7 @@
 
 package io.challenge_workshop.mal_ui.auth
 
+import androidx.browser.auth.AuthTabIntent
 import androidx.lifecycle.Lifecycle
 import io.challenge_workshop.mal_ui.mal.ANDROID_REDIRECT_URI
 import io.challenge_workshop.mal_ui.mal.MalAuthConfig
@@ -56,6 +57,24 @@ class AndroidRedirectSignInTest {
     }
 
     /**
+     * The same login on a device with no Auth Tab, which is most of them: no result code exists, the
+     * redirect comes back as an `Intent`, and `rememberAuthRedirectChannel()` hands out the bare
+     * intent filter. Covered separately because the two arrangements are different objects, and only
+     * one of them is what a Firefox user gets.
+     */
+    @Test
+    fun a_device_without_an_auth_tab_completes_the_login_through_the_intent_filter() = androidSignInTest {
+        signInWithoutAuthTab()
+        val pending = assertNotNull(store.readPending())
+
+        inbox.deliver(redirectIntent(pending.state))
+
+        assertEquals(SessionState.SignedIn(FAKE_MAL_USER), awaitSettledSession())
+        assertEquals(1, exchanges())
+        assertNull(store.readPending())
+    }
+
+    /**
      * The ticket's rule, and the only thing standing between a hostile Intent and a destroyed
      * verifier: the filter is exported, any app on the device can fire that Intent, and
      * `MalSessionRepository.completeAuthorization` treats a `state` mismatch as fatal — it clears
@@ -106,7 +125,9 @@ class AndroidRedirectSignInTest {
      */
     @Test
     fun suspected_cancellation_leaves_the_pending_authorization_in_the_store() = androidSignInTest {
-        signIn()
+        // No Auth Tab: the lifecycle heuristic is the only cancellation signal there is here, which
+        // is the situation this rule exists for.
+        signInWithoutAuthTab()
         val pending = assertNotNull(store.readPending())
 
         lifecycle.value = Lifecycle.State.CREATED
@@ -159,6 +180,62 @@ class AndroidRedirectSignInTest {
     }
 
     /**
+     * The ticket's third rule. On a browser that degrades, both sides of the race can produce the
+     * same redirect — the Auth Tab's result code and the intent filter — and MAL's authorization
+     * codes are single-use, so a second exchange would fail and take the fresh Session down with it.
+     */
+    @Test
+    fun an_auth_tab_result_and_an_intent_filter_redirect_together_exchange_once() = androidSignInTest {
+        signIn()
+        val pending = assertNotNull(store.readPending())
+
+        authTabResults.deliver(
+            AuthTabResult(AuthTabIntent.RESULT_OK, androidRedirect(pending.state)),
+        )
+        inbox.deliver(redirectIntent(pending.state))
+
+        assertEquals(SessionState.SignedIn(FAKE_MAL_USER), awaitSettledSession())
+        assertEquals(1, exchanges(), "the two sides of the race must not both be exchanged")
+        assertNull(viewModel.error)
+    }
+
+    /**
+     * The ticket's second rule, at the level where it matters. A real back-press on Chrome 137+ is
+     * the one cancellation this app can be sure of — and even then the Pending Authorization stays,
+     * because the user can press the sign-in button again and the verifier is still good.
+     */
+    @Test
+    fun an_auth_tab_cancellation_leaves_the_pending_authorization_in_the_store() = androidSignInTest {
+        signIn()
+        val pending = assertNotNull(store.readPending())
+
+        authTabResults.deliver(AuthTabResult(AuthTabIntent.RESULT_CANCELED, redirect = null))
+        settle()
+
+        assertEquals(pending, store.readPending(), "a cancelled Auth Tab must keep the verifier")
+        assertTrue(repository.state.value is SessionState.SignedOut, "${repository.state.value}")
+        assertTrue(viewModel.canStart, "and the sign-in button has to come back")
+        assertNull(viewModel.error, "backing out is not an error to report")
+    }
+
+    /**
+     * The degraded path, end to end: a `RESULT_CANCELED` that is not a cancellation at all, followed
+     * by the redirect through the intent filter. Reported as cancelled, this would be a sign-in that
+     * fails for everyone not on Chrome 137+.
+     */
+    @Test
+    fun a_cancelled_result_code_that_is_really_a_success_still_signs_in() = androidSignInTest {
+        signIn()
+        val pending = assertNotNull(store.readPending())
+
+        authTabResults.deliver(AuthTabResult(AuthTabIntent.RESULT_CANCELED, redirect = null))
+        inbox.deliver(redirectIntent(pending.state))
+
+        assertEquals(SessionState.SignedIn(FAKE_MAL_USER), awaitSettledSession())
+        assertNull(store.readPending())
+    }
+
+    /**
      * One process, one launch redirect. A second `StartupRedirect` consumption would hand a spent
      * code to a repository with no Pending Authorization left, and put an error card over a Session
      * that is working perfectly.
@@ -205,17 +282,43 @@ class AndroidRedirectSignInTest {
             clientFactory = fakeMal { requested += it.url.toString() },
         )
         val viewModel = MalSessionViewModel(repository, AndroidStartupRedirect(store, inbox))
-        private val channel = IntentRedirectChannel(
+
+        /** The Auth Tab's results, so a test can report a result code the way the launcher does. */
+        val authTabResults = AuthTabResultInbox()
+
+        /**
+         * Both real arrangements, built the way `rememberAuthRedirectChannel()` builds them, so a
+         * test picks the device it is talking about rather than a channel it assembled itself.
+         *
+         * `AuthTab` is a Chrome 137+ device: Auth Tab in front, intent filter behind, the two raced.
+         * `CustomTab` is Firefox or pre-137 Chrome, where `rememberAuthRedirectChannel()` returns the
+         * bare intent filter — no result code exists there, so a test that reports one is not
+         * describing that device.
+         */
+        private fun channelFor(plan: BrowserPlan) = plan.redirectChannel(
             inbox = inbox,
             lifecycleStates = lifecycle,
-            launchBrowser = { },
+            results = authTabResults,
+            launchers = BrowserLaunchers(authTab = { }, customTab = { }, plainly = { }),
         )
 
         /** How many times the token endpoint was asked to exchange a code. */
         fun exchanges(): Int = requested.count { it.startsWith(FAKE_MAL_TOKEN_ENDPOINT) }
 
-        fun signIn() {
-            viewModel.signIn(channel, openUri = {})
+        /** A sign-in on a device with an Auth Tab. */
+        fun signIn() = signIn(BrowserPlan.AuthTab("com.android.chrome"))
+
+        /**
+         * A sign-in on a device without one, where the intent filter is the only capture there is.
+         *
+         * Worth its own entry point rather than being approximated by withholding a result code: on
+         * this device there is no Auth Tab to withhold one from, so the grace window does not exist
+         * and the lifecycle heuristic settles a cancellation outright.
+         */
+        fun signInWithoutAuthTab() = signIn(BrowserPlan.CustomTab("org.mozilla.firefox"))
+
+        private fun signIn(plan: BrowserPlan) {
+            viewModel.signIn(channelFor(plan), openUri = {})
             settle()
         }
 

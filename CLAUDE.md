@@ -105,8 +105,8 @@ is correct for a public client.
 The Client ID is entered at runtime so no real one is committed.
 
 Each target captures the redirect itself (`AuthRedirectChannel` in `:app:shared/auth`): desktop on a loopback listener,
-web in a popup, Android on the manifest's custom-scheme intent filter (ticket 16 adds an Auth Tab in front of that and
-races the two). **Paste-the-code is not dead code** — it is the modelled fallback for a headless desktop, a blocked
+web in a popup, Android on an Auth Tab raced against the manifest's custom-scheme intent filter.
+**Paste-the-code is not dead code** — it is the modelled fallback for a headless desktop, a blocked
 popup or a missing Custom-Tabs browser, and it is the path every capture funnels into, so there is one parser and one
 set of error messages.
 
@@ -198,14 +198,53 @@ routes on `:server`, and nothing here forwards anything to MAL.)
   written before the browser opens.
 - **`intent.data` is nulled on delivery.** `setIntent()` hands the same object to a later recreation, and an
   authorization code is single-use.
-- **Cancellation is a heuristic and must stay non-destructive.** There is no cancellation API without Auth Tab, so a
-  resume that follows a stop is treated as backing out. The `ON_STOP` requirement is what stops the *first* `onResume`
-  — which fires before the browser is on top — cancelling every sign-in at the moment it starts; a call, a
-  notification or a configuration change still read as cancellations. So `Cancelled` only re-enables the button, and
-  `MalSessionRepository.cancelAuthorization` keeps the Pending Authorization. A redirect already delivered wins over a
-  suspected cancellation without a grace window, because `onNewIntent` precedes `onResume`. The signal is
+- **Cancellation is a heuristic and must stay non-destructive.** On the intent-filter path there is no cancellation
+  API at all, so a resume that follows a stop is treated as backing out. The `ON_STOP` requirement is what stops the
+  *first* `onResume` — which fires before the browser is on top — cancelling every sign-in at the moment it starts; a
+  call, a notification or a configuration change still read as cancellations. So `Cancelled` only re-enables the
+  button, and `MalSessionRepository.cancelAuthorization` keeps the Pending Authorization. A redirect already delivered
+  wins over a suspected cancellation without a grace window, because `onNewIntent` precedes `onResume`. The signal is
   `Lifecycle.currentStateFlow`, not `eventFlow`: the capture only subscribes after the browser has been launched, and
   a `StateFlow` still tells a late subscriber that the Activity is off screen.
+
+### Android sign-in: Auth Tab in front, intent filter behind, and the two raced
+
+`AuthTabRedirectChannel` wraps `androidx.browser`'s `AuthTabIntent`, which is the right tool for this: the redirect
+comes back through an `ActivityResultLauncher` — no intent filter involved — and the user backing out is a real result
+code rather than a lifecycle guess. `rememberAuthRedirectChannel()` is a `@Composable` because of it: an
+`ActivityResultLauncher` can only be registered from composition, and androidx requires that registration to happen
+unconditionally, before the Activity reaches `STARTED`.
+
+**It is not enough on its own, and that is the whole design.** Auth Tab needs **Chrome 137+**. Everywhere else the same
+Intent is read as a plain Custom Tab — androidx puts a null `EXTRA_SESSION` in it so that it is — and the launcher then
+reports `RESULT_CANCELED` **even when the login succeeded**, with the redirect arriving through the intent filter
+instead. Believing the result code alone would break sign-in for everyone not on current Chrome.
+
+So both channels run and neither is authoritative alone:
+
+- **A redirect from either side wins outright**, with no grace window. It is the one answer that cannot be a
+  misinterpretation.
+- **Anything else waits out `CANCELLATION_GRACE` (2s) for the other side.** Symmetric, because both orderings happen:
+  a `RESULT_CANCELED` that precedes the redirect it is really about, and a lifecycle heuristic that fires before the
+  result code lands. The window is only ever fully spent while the Activity is still off screen, so nobody watches it
+  run down.
+- **Two redirects for one sign-in are normal, and only one may be exchanged.** The channel returns exactly one
+  `AuthRedirectResult`, and `completeAuthorization` reads the Pending Authorization from the store and clears it.
+
+`IntentRedirectChannel.expect()` exists for this: the intent-filter side has to know which `state` to accept even when
+the Auth Tab already put the user in the browser, and `open()` would launch a second one.
+
+Which arrangement a device gets is `browserPlan()` — Auth Tab, plain Custom Tab, or bare `ACTION_VIEW` — from
+`CustomTabsClient.getPackageName()` and `isAuthTabSupported()`. Both return nothing useful without the manifest's
+`<queries>`, and nothing throws when it is missing. `BrowserPlan.redirectChannel()` is what each plan then builds, split
+out of the composable so `BrowserPlanTest` can pin *which launcher each plan reaches* — a swapped one still completes a
+sign-in and reports nothing, it just stops being the good arrangement.
+
+**`LocalUriHandler` is the last rung and must never be the first.** Its Android actual is a bare `ACTION_VIEW`: no
+Custom Tab, no result channel, no way to close the tab. That is precisely the `PlainView` rung and nothing above it —
+reimplementing it by hand would only do it worse, since Compose's handler already opens on the Activity's own Context
+and so needs no `FLAG_ACTIVITY_NEW_TASK`. **A WebView is disallowed, not discouraged** — RFC 8252 §8.12, and the
+password is only ever typed on myanimelist.net.
 
 ### Android sign-in: the manifest is load-bearing
 

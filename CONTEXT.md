@@ -22,7 +22,8 @@ The platform-specific means by which the authorization code gets from MAL's redi
 listener on desktop, a custom-scheme intent or Auth Tab result on Android, a popup message or same-origin route on web.
 In code it is `AuthRedirectChannel`, whose three phases — **arm** (reserve the platform resource), **open** (send the
 user to MAL), **await** (the redirect, a cancellation or a failure) — each exist because one platform cannot work
-without them. _Avoid_: Callback handling, deep link (a deep link is only the Android form of it)
+without them. Android runs two captures at once and arbitrates between them; see **Browser Plan**. _Avoid_: Callback
+handling, deep link (a deep link is only the Android form of it)
 
 **Paste-the-code**:
 The fallback in which the user copies the redirect URL out of their browser's address bar and pastes it into the app.
@@ -38,6 +39,14 @@ One is registered per platform and per web origin. _Avoid_: Redirect URL, callba
 Android only: the process-scoped hand-off that holds a redirect `Intent`'s URI until something takes it — an armed
 Redirect Capture, or the launch path when the process was killed while the user was away. In code it is
 `AuthRedirectInbox`. Deliberately not called a relay; see **Relay**, which is a different thing entirely.
+`AuthTabResultInbox` is the same idea for an Auth Tab's result code.
+
+**Browser Plan**:
+Android only: which of three ways this device will be sent to MyAnimeList — an **Auth Tab** (Chrome 137+, which hands the
+redirect back through a result and reports cancellation outright), a plain **Custom Tab**, or a bare `ACTION_VIEW`. Chosen
+once from what is installed, in `browserPlan()`. Every one of them keeps the Redirect Inbox behind it, because an Auth Tab
+degrades to a Custom Tab silently and the redirect then arrives as an `Intent` instead. _Avoid_: WebView — disallowed by
+RFC 8252 §8.12, not merely discouraged
 
 **Signed Out Reason**:
 Why a Session is absent — never signed in, signed out deliberately, a refresh MAL rejected, or an authorization that

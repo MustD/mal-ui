@@ -76,10 +76,19 @@ const val DESKTOP_LOOPBACK_PORT: Int = 18040
 const val DESKTOP_REDIRECT_URI: String = "http://127.0.0.1:$DESKTOP_LOOPBACK_PORT$OAUTH_CALLBACK_PATH"
 
 /**
+ * The private-use URI scheme Android's Redirect URI is built on.
+ *
+ * Reverse-DNS named after a domain this app controls, as RFC 8252 §7.1 requires. A constant of its
+ * own because `AuthTabIntent.launch` takes the scheme *alone* — it is what the browser watches for
+ * to decide that the auth flow is over — while the manifest's intent filter and MAL each want a
+ * different slice of the same string.
+ */
+const val ANDROID_REDIRECT_SCHEME: String = "io.challenge-workshop.malui"
+
+/**
  * Android's Redirect URI.
  *
- * A private-use URI scheme, reverse-DNS named after a domain this app controls as RFC 8252 §7.1
- * requires. Written out in full rather than composed from [OAUTH_CALLBACK_PATH], because the pieces
+ * Composed from [ANDROID_REDIRECT_SCHEME] but not from [OAUTH_CALLBACK_PATH], because those pieces
  * do not line up: under a custom scheme `oauth` is the *authority* and `/callback` the path, so the
  * manifest's intent filter is `scheme="io.challenge-workshop.malui" host="oauth" path="/callback"`
  * even though MAL only ever sees the one string.
@@ -87,7 +96,7 @@ const val DESKTOP_REDIRECT_URI: String = "http://127.0.0.1:$DESKTOP_LOOPBACK_POR
  * Android compares the scheme case-insensitively; MAL compares the whole URI byte-exactly, so this
  * is the stricter of the two constraints.
  */
-const val ANDROID_REDIRECT_URI: String = "io.challenge-workshop.malui://oauth/callback"
+const val ANDROID_REDIRECT_URI: String = "$ANDROID_REDIRECT_SCHEME://oauth/callback"
 
 /**
  * The browser Redirect URI for a page served from [origin], such as `https://mal-ui.localhost` or

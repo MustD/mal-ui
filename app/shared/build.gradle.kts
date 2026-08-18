@@ -46,6 +46,12 @@ kotlin {
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.compose.uiTooling)
             implementation(libs.koin.android)
+            // Auth Tab, plus the plain Custom Tab it degrades to. See `AuthTabRedirectChannel`.
+            implementation(libs.androidx.browser)
+            // `rememberLauncherForActivityResult`, which is the only way to register the Auth Tab's
+            // `ActivityResultLauncher` from a composable — and the reason
+            // `rememberAuthRedirectChannel()` is a `@Composable` at all.
+            implementation(libs.androidx.activity.compose)
         }
         commonMain.dependencies {
             api(project(":core"))

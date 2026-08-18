@@ -16,9 +16,9 @@ import java.util.concurrent.atomic.AtomicReference
  * Android's Redirect Capture: the custom-scheme intent filter, arriving through
  * [AuthRedirectInbox].
  *
- * It works on every browser there is, which is why it lands before the Auth Tab that ticket 16 adds
- * on top of it — and why it stays afterwards, as the fallback for the browsers Auth Tab does not
- * support.
+ * It works on every browser there is, which is why it is still here now that
+ * [AuthTabRedirectChannel] sits in front of it: Auth Tab needs Chrome 137+ and degrades to a plain
+ * Custom Tab *silently* on everything else, and this is where the redirect then lands.
  *
  * Nothing is reserved, so no [ArmResult.Failed] is possible: the intent filter is declared in the
  * manifest, it is always live, and `AndroidManifestTest` is what holds it to
@@ -28,9 +28,10 @@ import java.util.concurrent.atomic.AtomicReference
  * so everything belonging to a single attempt lives in [Attempt] and [arm] starts a fresh one.
  *
  * @param lifecycleStates the hosting Activity's. The only signal there is that the user backed
- * out; see [awaitReturnToForeground].
- * @param launchBrowser opens a URL. Compose's `LocalUriHandler` in the app, which on Android is a
- * bare `ACTION_VIEW`. Ticket 16 replaces it with a Custom Tab.
+ * out, unless an Auth Tab is in play and can say so outright; see [awaitReturnToForeground].
+ * @param launchBrowser opens a URL. A plain Custom Tab where one is available, and Compose's
+ * `LocalUriHandler` — a bare `ACTION_VIEW` — where none is; see [BrowserPlan]. Never called at all
+ * when an Auth Tab took the user instead, which is what [expect] is for.
  */
 internal class IntentRedirectChannel(
     private val inbox: AuthRedirectInbox,
@@ -56,6 +57,19 @@ internal class IntentRedirectChannel(
     }
 
     /**
+     * Records which redirect this attempt will accept, without sending anyone anywhere.
+     *
+     * Split out of [open] for [AuthTabRedirectChannel], which has already put the user in a browser
+     * and needs this side watching anyway: an Auth Tab degrades silently to a plain Custom Tab, and
+     * the redirect then arrives here instead of through a result code. Launching a second browser
+     * would be the alternative, and there is no version of that which is not a bug.
+     */
+    fun expect(authorizationUrl: String) {
+        val attempt = current.get() ?: return
+        attempt.expectedState = stateIn(authorizationUrl)
+    }
+
+    /**
      * Records the `state` to expect, then sends the user to the browser.
      *
      * Synchronous, unlike the desktop listener's: there is no `Desktop.browse()` hang to keep off
@@ -63,7 +77,7 @@ internal class IntentRedirectChannel(
      */
     override fun open(authorizationUrl: String) {
         val attempt = current.get() ?: return
-        attempt.expectedState = stateIn(authorizationUrl)
+        expect(authorizationUrl)
         try {
             // Nothing here logs the URL: under `plain` PKCE the code verifier travels inside it.
             launchBrowser(authorizationUrl)
@@ -129,8 +143,9 @@ internal class IntentRedirectChannel(
     /**
      * Suspends until this Activity is resumed **after** having been off screen.
      *
-     * There is no cancellation API without Auth Tab, so this is a heuristic, and the
-     * having-been-stopped requirement is what makes it survivable: the first `onResume` after
+     * The heuristic, and the whole reason [AuthTabRedirectChannel] exists to sit in front of this:
+     * a result code says what happened, and this can only guess. The having-been-stopped requirement
+     * is what makes the guess survivable: the first `onResume` after
      * launching a browser fires before the browser is on top, and acting on that alone would cancel
      * every sign-in at the moment it started.
      *
