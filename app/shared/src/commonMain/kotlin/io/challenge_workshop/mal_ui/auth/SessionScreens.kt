@@ -78,7 +78,10 @@ fun SignInScreen(
             enabled = !viewModel.busy,
             modifier = Modifier.fillMaxWidth(),
             supportingText = {
-                Text("From myanimelist.net/apiconfig. Prefilled from the build if `mal.clientId` is set.")
+                Text(
+                    "From myanimelist.net/apiconfig. Prefilled from the last one used on this " +
+                        "device, or from the build's `mal.clientId` — see local.properties.example.",
+                )
             },
         )
 

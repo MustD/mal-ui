@@ -3,6 +3,7 @@ package io.challenge_workshop.mal_ui.di
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
 import io.challenge_workshop.mal_ui.auth.StartupRedirect
 import io.challenge_workshop.mal_ui.mal.HttpClientFactory
+import io.challenge_workshop.mal_ui.mal.MAL_CLIENT_ID
 import io.challenge_workshop.mal_ui.mal.MalAuthConfig
 import io.challenge_workshop.mal_ui.session.JsonTokenStore
 import io.challenge_workshop.mal_ui.session.MalSessionRepository
@@ -37,7 +38,12 @@ val appModule: Module = module {
         MalSessionRepository(
             store = get(),
             clock = get(),
-            initialConfig = MalAuthConfig(clientId = ""),
+            // The build-time default only. A Client ID the user typed is remembered per device and
+            // replaces this in `restore()`; with neither, the sign-in screen prompts for one. This is
+            // the only place the generated constant is read — `:core` keeps `clientId` a required
+            // parameter so its own tests cannot pick up whatever this machine's build was configured
+            // with.
+            initialConfig = MalAuthConfig(clientId = MAL_CLIENT_ID),
             clientFactory = get(),
         )
     }

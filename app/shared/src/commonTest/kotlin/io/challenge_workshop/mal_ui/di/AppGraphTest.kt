@@ -1,6 +1,7 @@
 package io.challenge_workshop.mal_ui.di
 
 import io.challenge_workshop.mal_ui.mal.HttpClientFactory
+import io.challenge_workshop.mal_ui.mal.MAL_CLIENT_ID
 import io.challenge_workshop.mal_ui.mal.MalUser
 import io.challenge_workshop.mal_ui.session.JsonTokenStore
 import io.challenge_workshop.mal_ui.session.KeyValueStore
@@ -67,6 +68,24 @@ class AppGraphTest {
         assertSame(first, koin.get<MalSessionRepository>())
 
         first.close()
+    }
+
+    @Test
+    fun the_repository_starts_from_the_build_time_client_id() {
+        // The graph is the only place that may name the build-time default, and it must not hardcode a
+        // literal: a build configured with `mal.clientId` has to reach the repository, and the
+        // remembered value then overrides it in `restore()`.
+        //
+        // Honest about its reach: in a build configured with no Client ID this compares "" to "" and
+        // cannot fail. It bites in a build that sets one — `./gradlew :app:shared:jvmTest
+        // -Pmal.clientId=...`, or CI with `MAL_CLIENT_ID` set — which is also the only configuration
+        // in which the wiring matters.
+        val koin = koin()
+
+        val repository = koin.get<MalSessionRepository>()
+
+        assertEquals(MAL_CLIENT_ID, repository.config.value.clientId)
+        repository.close()
     }
 
     @Test

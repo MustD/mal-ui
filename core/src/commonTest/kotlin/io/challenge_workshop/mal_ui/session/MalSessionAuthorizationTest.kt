@@ -110,6 +110,30 @@ class MalSessionAuthorizationTest {
     }
 
     @Test
+    fun beginning_an_authorization_remembers_the_client_id_for_the_next_launch() = runTest {
+        val f = Fixture()
+
+        f.repository.beginAuthorization()
+
+        // Remembered here rather than on every keystroke: this is the first moment the value is
+        // committed to, and one the user never has to reach twice.
+        assertEquals(TEST_CONFIG.clientId, f.store.readClientId())
+        f.repository.close()
+    }
+
+    @Test
+    fun a_client_id_typed_over_the_remembered_one_replaces_it() = runTest {
+        val f = Fixture()
+        f.store.writeClientId("an-older-client-id")
+
+        f.repository.useClientId("a-newer-client-id")
+        f.repository.beginAuthorization()
+
+        assertEquals("a-newer-client-id", f.store.readClientId())
+        f.repository.close()
+    }
+
+    @Test
     fun beginning_an_authorization_moves_to_authorizing_with_the_persisted_record() = runTest {
         val f = Fixture()
 

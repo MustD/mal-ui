@@ -48,6 +48,13 @@ once from what is installed, in `browserPlan()`. Every one of them keeps the Red
 degrades to a Custom Tab silently and the redirect then arrives as an `Intent` instead. _Avoid_: WebView — disallowed by
 RFC 8252 §8.12, not merely discouraged
 
+**Client ID**:
+The public identifier of this app's registration on myanimelist.net, sent with every authorization and token request.
+Not a secret — it travels in the authorization URL, visible in the user's own address bar — so it is remembered for
+convenience rather than protected: the one last signed in with on this device, else the build's `mal.clientId` default,
+else the user is asked. It identifies the *app*, so signing out does not forget it. _Avoid_: API key, app key, client
+secret (a public client has no secret, and `MalAuthConfig.clientSecret` exists only for a `web`-type app)
+
 **Signed Out Reason**:
 Why a Session is absent — never signed in, signed out deliberately, a refresh MAL rejected, or an authorization that
 failed. Carried so the UI can explain itself rather than showing a bare "signed out".

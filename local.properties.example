@@ -1,0 +1,23 @@
+## Copy to `local.properties` (gitignored) and fill in.
+#
+# The MyAnimeList Client ID this build prefills the sign-in screen with. Register an app at
+# https://myanimelist.net/apiconfig with App Type `other` to get one; a public client gets no secret,
+# and the ID is not a secret either — it travels in the authorization URL, visible in the user's own
+# address bar. So this is convenience and not-in-git, not credential storage.
+#
+# Three ways to set it, highest precedence first:
+#
+#   1. `-Pmal.clientId=...`, or a `mal.clientId=...` line in `~/.gradle/gradle.properties` — outside
+#      the repo entirely.
+#   2. the `MAL_CLIENT_ID` environment variable — the simplest route for CI. Note that
+#      `ORG_GRADLE_PROJECT_mal_clientId` does *not* work: Gradle does no underscore-to-dot
+#      conversion, so it sets `mal_clientId`, which nothing reads.
+#   3. the line below.
+#
+# An empty value at any step falls through to the next, so `-Pmal.clientId=` cannot hide the others.
+# Set nowhere, it is empty and the app asks for one — never a build failure. A Client ID typed into
+# the app is remembered on that device and wins over this default.
+mal.clientId=
+
+# Android SDK location. Written by the IDE; keep whatever is already in your `local.properties`.
+#sdk.dir=/path/to/Android/Sdk

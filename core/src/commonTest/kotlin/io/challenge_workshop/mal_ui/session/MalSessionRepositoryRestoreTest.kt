@@ -1,5 +1,6 @@
 package io.challenge_workshop.mal_ui.session
 
+import io.challenge_workshop.mal_ui.mal.MalAuthConfig
 import io.challenge_workshop.mal_ui.mal.MalTokens
 import io.challenge_workshop.mal_ui.mal.MalUser
 import kotlinx.coroutines.test.runTest
@@ -21,11 +22,11 @@ private val USER = MalUser(id = 42, name = "someone")
 
 class MalSessionRepositoryRestoreTest {
 
-    private class Fixture {
+    private class Fixture(initialConfig: MalAuthConfig = MalAuthConfig(clientId = "")) {
         val kv = FakeKeyValueStore()
         val clock = FakeClock()
         val store = JsonTokenStore(kv, clock = clock)
-        val repository = MalSessionRepository(store, clock)
+        val repository = MalSessionRepository(store, clock, initialConfig)
     }
 
     @Test
@@ -217,5 +218,36 @@ class MalSessionRepositoryRestoreTest {
             SessionState.SignedOut(SignedOutReason.RefreshRejected) !=
                 SessionState.SignedOut(SignedOutReason.NeverSignedIn),
         )
+    }
+
+    @Test
+    fun a_remembered_client_id_replaces_the_build_time_default_on_restore() = runTest {
+        val f = Fixture(MalAuthConfig(clientId = "from-the-build"))
+        f.store.writeClientId("typed-by-the-user")
+
+        f.repository.restore()
+
+        assertEquals("typed-by-the-user", f.repository.config.value.clientId)
+    }
+
+    @Test
+    fun with_nothing_remembered_the_build_time_default_survives_restore() = runTest {
+        val f = Fixture(MalAuthConfig(clientId = "from-the-build"))
+
+        f.repository.restore()
+
+        assertEquals("from-the-build", f.repository.config.value.clientId)
+    }
+
+    @Test
+    fun a_remembered_client_id_survives_a_restore_that_finds_no_session() = runTest {
+        // The Client ID identifies the app, not the user: it outlives every Session on the device.
+        val f = Fixture()
+        f.store.writeClientId("typed-by-the-user")
+
+        f.repository.restore()
+
+        assertEquals(SessionState.SignedOut(SignedOutReason.NeverSignedIn), f.repository.state.value)
+        assertEquals("typed-by-the-user", f.repository.config.value.clientId)
     }
 }

@@ -696,9 +696,16 @@ is also visible in the user's own address bar. So the goal is *convenience and n
 `local.properties` fallbacks. Resolution order at runtime: persisted user-entered value → build-time default → prompt.
 Prefill the existing text field from the default so it becomes an override rather than a mandatory step.
 
-Precedence, best-to-worst for never-in-git: `~/.gradle/gradle.properties` (outside the repo entirely, and CI gets it
-free via `ORG_GRADLE_PROJECT_mal_clientId`) → `local.properties` (already gitignored)
-→ `MAL_CLIENT_ID` env var.
+Two different orders, which this section originally ran together. Best-to-worst for **never-in-git**:
+`~/.gradle/gradle.properties` (outside the repo entirely) → `local.properties` (already gitignored) → `MAL_CLIENT_ID` env
+var (ends up in shell history). **Resolution precedence** as shipped is Gradle property → env var → `local.properties`,
+with a set-but-empty value at any step falling through rather than short-circuiting.
+
+`ORG_GRADLE_PROJECT_mal_clientId` **does not work** and this section was wrong to offer it `[verified during ticket
+17]`: Gradle maps `ORG_GRADLE_PROJECT_x` to the project property `x` verbatim, with no underscore-to-dot conversion, so
+that name sets `mal_clientId`, nothing reads it, and the build silently resolves to `""`. The dotted
+`ORG_GRADLE_PROJECT_mal.clientId` does work — a shell cannot assign that name, but `env` and most CI secret UIs can —
+and `MAL_CLIENT_ID` is the straightforward CI route.
 
 **Skip BuildKonfig.** 0.22.0's breaking change was *"remove standalone Kotlin/JS plugin support to unblock Kotlin
 2.4.0"* and its README documents no wasmJs support `[verified from CHANGELOG]`; this repo has both js and wasmJs. Not

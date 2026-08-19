@@ -34,9 +34,14 @@ class MalSessionViewModel(
     val state: StateFlow<SessionState> = repository.state
 
     /**
-     * Prefilled from the build-time default so it reads as an override rather than a mandatory step.
-     * A public client's ID is not a secret — it is visible in the user's own address bar — so the only
-     * goal is convenience and not-in-git.
+     * Prefilled so it reads as an override rather than a mandatory step: the Client ID the device
+     * remembers if there is one, and the build-time `mal.clientId` default otherwise. A public
+     * client's ID is not a secret — it is visible in the user's own address bar — so the only goal is
+     * convenience and not-in-git.
+     *
+     * Seeded twice, because the remembered value comes out of the store and so cannot be in the
+     * config yet when this object is constructed: once here, and again from `init` once `restore()`
+     * has settled it.
      */
     var clientId by mutableStateOf(repository.config.value.clientId)
         private set
@@ -94,6 +99,10 @@ class MalSessionViewModel(
         if (repository.state.value is SessionState.Restoring) {
             launchGuarded {
                 repository.restore()
+                // A remembered Client ID only exists in the config after this point. Safe to
+                // overwrite the field: `busy` is set for the length of this block, and the Client ID
+                // input is disabled while it is, so there is nothing typed to lose.
+                clientId = repository.config.value.clientId
                 // Strictly after the store has been read. `restore` settles the state from what it
                 // finds there, so completing a redirect first would have its `SignedIn` overwritten
                 // a moment later by whatever the store said before the sign-in.

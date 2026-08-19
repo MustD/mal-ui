@@ -74,6 +74,17 @@ class MalSessionViewModelTest {
     }
 
     @Test
+    fun a_client_id_remembered_from_a_previous_launch_replaces_the_prefill() = runTest {
+        store.writeClientId("remembered-on-this-device")
+
+        // Read from the store, so it cannot be in the config when this object is constructed — the
+        // field has to be re-synced once `restore()` has settled it.
+        val viewModel = MalSessionViewModel(repository, StartupRedirect.None)
+
+        assertEquals("remembered-on-this-device", viewModel.clientId)
+    }
+
+    @Test
     fun editing_the_client_id_reaches_the_repository_config() {
         val viewModel = MalSessionViewModel(repository, StartupRedirect.None)
 
