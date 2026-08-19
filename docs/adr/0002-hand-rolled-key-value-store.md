@@ -29,7 +29,10 @@ out the closest candidates.
   Android, **excluding the store from Auto Backup matters more than encrypting it** — see ticket 14.
 - Desktop writes a `0600` file under `$XDG_STATE_HOME`. The interface is deliberately narrow enough that an OS-keychain
   implementation can be swapped in later without touching a caller.
-- Keys are versioned (`mal.session.v1`), so a format change is a clean re-login rather than a crash loop.
+- Keys are versioned (`mal.session.v1`), so a format change is a clean re-login rather than a crash loop. The store
+  holds three such records, not one: the Session, the Pending Authorization, and — since ticket 17 — the Client ID
+  (`mal.clientId.v1`). `JsonTokenStore.clear()` deliberately drops the first two and **keeps** the third: the Client ID
+  identifies the app rather than the user, so signing out must not turn the next sign-in into a retyping exercise.
 - Web is `sessionStorage` — see [ADR-0001](0001-refresh-token-in-web-session-storage.md).
 - The cost is four small implementations to maintain and test ourselves. The benefit is no dependency that can go stale
   underneath a four-target build, which is what happened to every library above.

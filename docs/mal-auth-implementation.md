@@ -50,7 +50,7 @@ follows from tokens outliving a single screen:
 now records answers rather than experiments.
 
 Method, and how to re-run it if MAL's behaviour changes:
-[`docs/adr/mal-redirect-uri-probes.http`](adr/mal-redirect-uri-probes.http). Registration itself needs a logged-in
+[`docs/mal-api/mal-redirect-uri-probes.http`](mal-api/mal-redirect-uri-probes.http). Registration itself needs a logged-in
 apiconfig session, but everything after it is machine-checkable, because MAL validates the client and the redirect URI
 *before* it looks at the authorization code. Posting a deliberately undecryptable code to
 `/v1/oauth2/token` therefore separates the two cases without a browser or a session:
@@ -168,8 +168,9 @@ So: **never log the authorization URL, the code, or the verifier**; prefer strip
 possible ([§5.2](#52-callback-response-page), [§6.4](#64-clean-the-url-after-capture)); and treat the `state` check as
 load-bearing rather than decorative. It already exists — keep it.
 
-This is MAL's limitation, not something the implementation can fix. It belongs in `errors.md`
-alongside the existing `plain`-only note.
+This is MAL's limitation, not something the implementation can fix. Also recorded in
+[`errors.md`](errors.md#plain-pkce-is-weaker-than-it-looks--by-design-not-fixable-here), which is where it is likeliest
+to be read while something is actually going wrong.
 
 ---
 
@@ -318,7 +319,8 @@ on myanimelist.net.
 
 **`androidx.browser:browser:1.10.0`** — stable, 2026-03-25; AAR declares `minSdkVersion 23` so
 `minSdk = 24` is fine; no dependency conflicts with Kotlin 2.4.10 / compileSdk 36 `[verified from
-Google Maven + the AAR]`. No AGP 9 incompatibility found, but not build-tested `[unverified]`.
+Google Maven + the AAR]`. **Now build-tested under AGP 9: it ships** (ticket 16) `[verified]` — the
+`AuthTabIntent` path compiles and `AuthTabRedirectChannelTest` / `BrowserPlanTest` run against it.
 
 `AuthTabIntent` (`androidx.browser.auth`, added in 1.9.0 `[verified in the sources jar]`) is purpose-built for this and
 is the biggest change since this problem was last "solved": it returns the redirect URI through an
@@ -781,7 +783,7 @@ Each phase is independently testable and leaves the app working.
 
 **Phase 0 — settle the unknowns. Done, 2026-08-06.** [§1](#1-verified-2026-08-06) is measured, all eight redirect URIs
 are registered on one client ID, and the answers are recorded there. Ticket 09 and everything downstream of it are
-unblocked. Re-run [`docs/adr/mal-redirect-uri-probes.http`](adr/mal-redirect-uri-probes.http) if the registered set
+unblocked. Re-run [`docs/mal-api/mal-redirect-uri-probes.http`](mal-api/mal-redirect-uri-probes.http) if the registered set
 changes.
 
 **Phase 1 — shared foundation, no UI change.** All in `:core`, all covered by `:core:allTests`.
@@ -820,24 +822,42 @@ documented fallback for headless desktop, blocked popups, and browsers without C
 
 ## 10. Open questions
 
-Carried forward from the research; each is `[unverified]`:
+Carried forward from the research. Three of the four are now closed; the numbering is kept so nothing is reopened by
+accident.
 
-1. **`androidx.browser` 1.10.0 under AGP 9 + compileSdk 36** — no reported problem, not build-tested.
-2. **Does `com.android.kotlin.multiplatform.library` support `src/androidMain/AndroidManifest.xml`?**
-   Sidestepped by keeping manifest changes in `:app:androidApp`.
-3. **Real-world share of Chrome ≥137**, i.e. how often the Auth Tab fallback path actually runs.
-4. **multiplatform-settings 1.3.0 consumed from Kotlin 2.4.10** — klib compatibility should hold; not compiled. Only
-   matters if §8's recommendation is overridden.
+1. **`androidx.browser` 1.10.0 under AGP 9 + compileSdk 36** — **closed by ticket 16** `[verified]`. Build-tested and
+   shipped: no AGP 9 incompatibility exists. See [§4.1](#41-browser-choice).
+2. **Does `com.android.kotlin.multiplatform.library` support `src/androidMain/AndroidManifest.xml`?** — **still
+   unanswered, and still sidestepped.** Ticket 14 kept every manifest change in `:app:androidApp`, so the question never
+   had to be settled. It returns only if `:app:shared` ever needs a manifest of its own.
+3. **Real-world share of Chrome ≥137**, i.e. how often the Auth Tab fallback path actually runs. — **Still open, and
+   deliberately so.** The design no longer depends on the answer: both channels are wired and raced, and neither is
+   authoritative alone ([§4.2](#42-receiving-the-redirect)), so a bad guess costs nothing. Knowing the share would only
+   tell us which path is the common one, not which to build.
+4. **multiplatform-settings 1.3.0 consumed from Kotlin 2.4.10** — **moot.** It was conditional on §8's recommendation
+   being overridden, and it was not: `KeyValueStore` is hand-rolled, so the library is never consumed and its klib
+   compatibility does not matter. See
+   [ADR-0002](adr/0002-hand-rolled-key-value-store.md).
+
+Added and closed during implementation, not in the original list:
+
+5. **Koin 4.1.0 on all four targets under Kotlin 2.4.10** — **closed by ticket 01** `[verified]`. The concern was a
+   wasmJs klib compiled against 2.1.20; it did not materialise. `KoinSmokeTest` starts a real `Koin`, resolves a binding
+   and asserts `single` identity, and is reported by `jvmTest`, `testAndroidHostTest`, `jsBrowserTest` and
+   `wasmJsBrowserTest`. No fallback container was needed.
 
 Closed 2026-08-06, both by measurement and both in the permissive direction — kept here so they are not reopened by
 accident: **multiple redirect URIs per MAL app** ([§1.1](#11-can-one-app-register-multiple-redirect-urls)) and **which
 URI forms apiconfig accepts** ([§1.2](#12-does-the-registration-form-accept-these-uri-forms)). The corollary that *did*
 change the code is that omitting `redirect_uri` is no longer legal.
 
-Still unverified but out of MAL's hands, because nothing was listening when the probes ran: that the web dev servers
-serve `/oauth/callback` under `historyApiFallback`, that the `/mal` prefix agrees across `:core`, the webpack dev server
-and the reverse proxy, and that the desktop loopback listener does not bind `0.0.0.0`. §D and §E of
-[the probe file](adr/mal-redirect-uri-probes.http) cover these; they belong to phases 3 and 4, not to phase 0.
+Three things were unverified only because nothing was listening when the probes ran, and all three have since been
+settled in code rather than by re-probing: the web dev servers serve `/oauth/callback` under `historyApiFallback`
+(ticket 12), the `/mal` prefix agrees across `:core`, the webpack dev server and the reverse proxy (one `MAL_RELAY_PATH_PREFIX`
+constant, pinned by `MalEndpointsTest`), and the desktop loopback listener binds `127.0.0.1` rather than `0.0.0.0`
+(`LoopbackRedirectListenerTest.the_socket_is_not_reachable_from_a_non_loopback_address`, which binds the real port
+rather than faking it). §D and §E of [the probe file](mal-api/mal-redirect-uri-probes.http) remain the way to
+re-check them against a running stack.
 
 Corrections made during research, recorded so they are not re-introduced: `state` **is** already verified
 (`MalAuthClient.kt:71`); `MalAuthClient.refresh()`'s KDoc about old refresh tokens staying valid **is** correct per

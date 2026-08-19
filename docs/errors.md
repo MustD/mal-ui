@@ -92,3 +92,116 @@ server that the proxy cannot reach.
 
 The relay forwards client secrets and bearer tokens to MAL unchanged. That is fine on localhost, but it must not be
 exposed publicly without authentication of its own.
+
+---
+
+## `plain` PKCE is weaker than it looks — by design, not fixable here
+
+MAL supports `code_challenge_method=plain` only. `Pkce` in `:core` is therefore correct in setting
+`code_challenge == code_verifier` and doing no SHA-256 — but that equality has a consequence worth stating plainly,
+because it is easy to read "we use PKCE" as "the code is safe".
+
+### Cause
+
+With `plain`, the challenge *is* the verifier, so **the verifier travels in cleartext in the authorization URL**.
+RFC 7636 §7.2:
+
+> With the "plain" method, there is a chance that "code_challenge" will be observed by the attacker on
+> the device or in the http request. Since the code challenge is the same as the code verifier in this
+> case, the "plain" method does not protect against the eavesdropping of the initial request.
+
+Which attacker that stops, and which it does not:
+
+| Attacker sees                                                                            | PKCE helps? |
+|------------------------------------------------------------------------------------------|-------------|
+| the **redirect** — a local process racing :18040, an app claiming the same custom scheme | yes — they have the code, not the verifier |
+| the **authorization URL** — browser history, an extension, a log line, shell history     | **no — none at all** |
+
+### Consequences for this repo
+
+- **Never log the authorization URL, the code, or the verifier.** Pinned by
+  `MalSessionViewModelTest.nothing_the_ui_can_see_carries_a_token_a_code_or_a_verifier`.
+- **Strip the code from history where the platform allows it**, and both places that do exist for this rather than for
+  tidiness: `LoopbackRedirectListener` answers the callback with a 302 to a bare path instead of rendering a page at the
+  code-bearing URL, and web calls `history.replaceState` (never `pushState` — a new entry would preserve exactly what
+  the call removes) in `AuthRedirectQuery`.
+- **The `state` check is load-bearing, not decorative.** It is the only remaining thing standing between a leaked
+  authorization URL and a usable code. `MalAuthClient.completeAuthorization()` verifies it; Android's
+  `IntentRedirectChannel` filters on it as well, because that intent filter is exported and any app can fire it.
+
+This is MAL's limitation. A different implementation cannot fix it — only MAL adding S256 would. See
+[`mal-auth-implementation.md` §2](mal-auth-implementation.md#2-security-plain-pkce-is-weaker-than-it-looks).
+
+---
+
+## `Desktop.Action.BROWSE` is unsupported on this machine — and `LocalUriHandler` is still right
+
+### Symptom
+
+`java.awt.Desktop.isDesktopSupported()` is `true`, but `Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)`
+returns `false`. Reproduced on JDK 11, 21, 25 and 26, so it is not a JDK-version problem. A hand-rolled
+`Desktop.browse(uri)` would throw `UnsupportedOperationException` and the desktop sign-in would never reach a browser.
+
+### Cause
+
+The JDK registers `BROWSE` only if GIO's default VFS advertises the `http` scheme. With `gvfs` not installed, GIO
+reports only `['file', 'resource']` — verified by probing `libgio` directly — so the action is never added. This is a
+property of the machine's desktop stack, not of the app.
+
+### Fix — do nothing, and specifically do not hand-roll it
+
+Compose Desktop's `DesktopUriHandler` already falls back to `xdg-open` on Linux when `BROWSE` is unsupported (verified
+in `ui-desktop-1.11.1` sources). So `LocalUriHandler` works here and a hand-rolled `Desktop.browse()` would be strictly
+worse.
+
+The residual hazard is the reason the flow is built the way it is: **`xdg-open`'s exit code is never checked**, so a
+silent failure is indistinguishable from success. Nothing may depend on the launch having worked — the authorization
+URL stays on screen in a selectable field and the paste-the-code path stays reachable. That is what makes headless,
+SSH-forwarded and broken-`xdg-open` desktops usable rather than dead ends.
+
+---
+
+## Redirect-URI mismatch reports as `401 invalid_client` — and blames the wrong thing
+
+### Symptom
+
+`POST /v1/oauth2/token` returns:
+
+```
+HTTP/2 401
+{"error":"invalid_client","message":"Client authentication failed"}
+```
+
+The obvious reading is a wrong Client ID. It is at least as often a `redirect_uri` that does not byte-match a
+registered one — and the body is **identical** in both cases, so only the surrounding context distinguishes them.
+
+### Cause
+
+MAL matches the redirect URI **byte-exactly**, with no RFC 3986 normalization whatsoever. Measured against a URI that
+*is* registered, so each row is a rejection rather than an absence:
+
+| Mutation of a registered URI                          | Result                                                     |
+|-------------------------------------------------------|------------------------------------------------------------|
+| trailing slash appended                               | rejected                                                   |
+| host upper-cased (`MAL-UI.localhost`)                 | rejected — though RFC 3986 §3.2.2 makes the host case-insensitive |
+| default port made explicit (`:443` on `https`)        | rejected — no port normalization at all                    |
+| extra query parameter appended                        | rejected                                                   |
+| different loopback port (`:54321` vs registered `:18040`) | rejected                                                |
+
+No normalization means **no RFC 8252 §7.3 loopback-port leniency** either.
+
+### Consequences
+
+- **The desktop port cannot be ephemeral.** 18040 is part of the byte-exact registered URI, which is why
+  `DESKTOP_LOOPBACK_PORT` is a constant in `:core` and `LoopbackRedirectListener` binds that one port. Every port an
+  app might use has to be registered by hand.
+- **The Android intent filter must stay byte-identical to `ANDROID_REDIRECT_URI`.** It is three attributes
+  (`scheme`/`host`/`path`) in the manifest against one string in Kotlin, which is exactly how the two drift.
+  `AndroidManifestTest` asserts they agree.
+- **Omitting `redirect_uri` is not a way out.** With several URIs registered on the client, `/v1/oauth2/authorize`
+  answers 401 `invalid_client` when the parameter is absent — where a single-URI app gets a 303 to `login.php`. Always
+  send it, byte-identical, on both authorize and token.
+- **When a 401 `invalid_client` appears, check the redirect URI before the Client ID.** `MalAuthClient.hintFor()` says
+  so in the error text for this reason.
+
+Probes and how to re-run them: [`docs/mal-api/mal-redirect-uri-probes.http`](mal-api/mal-redirect-uri-probes.http).
