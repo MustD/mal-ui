@@ -36,8 +36,10 @@ fun Application.module() {
         }
     }
     routing {
+        // A liveness ping, so `curl 127.0.0.1:18010` distinguishes "relay is up"
+        // from "nothing is listening" without going through `/mal`.
         get("/") {
-            call.respondText(sayHello("Ktor"))
+            call.respondText("mal_ui relay")
         }
         malRelay(this)
     }

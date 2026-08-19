@@ -83,8 +83,8 @@ Tests — there is no single aggregate target that covers everything; each platf
 Single test (works for JVM-hosted test tasks):
 
 ```bash
-./gradlew :app:shared:jvmTest --tests "io.challenge_workshop.mal_ui.SharedLogicDesktopTest"
-./gradlew :app:shared:jvmTest --tests "*.SharedCommonTest.example"
+./gradlew :app:shared:jvmTest --tests "io.challenge_workshop.mal_ui.auth.LoopbackRedirectListenerTest"
+./gradlew :app:shared:jvmTest --tests "*.MalSessionViewModelTest.signing_in_is_blocked_until_a_client_id_is_present"
 ```
 
 `:core` has the same per-target split; `./gradlew :core:allTests` covers all four at once.
