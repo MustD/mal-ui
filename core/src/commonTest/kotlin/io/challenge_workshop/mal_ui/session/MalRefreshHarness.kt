@@ -1,5 +1,6 @@
 package io.challenge_workshop.mal_ui.session
 
+import io.challenge_workshop.mal_ui.animelist.AnimeListResponse
 import io.challenge_workshop.mal_ui.mal.HttpClientFactory
 import io.challenge_workshop.mal_ui.mal.MalAuthConfig
 import io.challenge_workshop.mal_ui.mal.MalTokens
@@ -11,6 +12,7 @@ import io.ktor.client.engine.mock.respondError
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.Url
 import io.ktor.http.headersOf
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.io.IOException
@@ -24,6 +26,17 @@ val TEST_CONFIG: MalAuthConfig = MalAuthConfig(
     redirectUri = "http://127.0.0.1:18040/oauth/callback",
     tokenEndpoint = TEST_TOKEN_ENDPOINT,
     apiBaseUrl = TEST_API_BASE_URL,
+)
+
+/**
+ * A pair the fake MAL already accepts, for tests that are about something other than refresh.
+ * Pass its access token as `acceptedAccessToken` — see [FakeMal].
+ */
+val VALID_TOKENS: MalTokens = MalTokens(
+    tokenType = "Bearer",
+    expiresIn = 2_415_600,
+    accessToken = "good-access",
+    refreshToken = "good-refresh",
 )
 
 val STALE_TOKENS: MalTokens = MalTokens(
@@ -66,6 +79,14 @@ class FakeMal(
     private val releaseRefresh: CompletableDeferred<Unit>? = null,
     /** Called on each `/users/@me` hit that carried an accepted token. */
     private val onAuthorizedRequest: suspend (HttpRequestData) -> Unit = {},
+    /**
+     * An access token to accept from the start, for tests whose subject is not the refresh path.
+     * Without one every first request earns a 401, which is the point for [MalSessionRefreshTest]
+     * and pure noise for anything else.
+     */
+    acceptedAccessToken: String? = null,
+    /** How the fake answers `/users/@me/animelist`, given the `offset` that was asked for. */
+    private val animeList: (Int) -> AnimeListResponse = { AnimeListResponse.Page(emptyList(), hasMore = false) },
 ) {
     var tokenEndpointHits: Int = 0
         private set
@@ -77,7 +98,15 @@ class FakeMal(
      * far as this fake MAL is concerned. Only a token the token endpoint has actually issued is
      * accepted, which is what makes the 401 earned rather than staged.
      */
-    private val acceptedAccessTokens = mutableSetOf<String>()
+    private val acceptedAccessTokens = mutableSetOf<String>().apply {
+        acceptedAccessToken?.let { add(it) }
+    }
+
+    /** Every `/users/@me/animelist` request the fake was asked, in order, including retried ones. */
+    val animeListRequests: MutableList<Url> = mutableListOf()
+
+    /** The `Authorization` header of each of [animeListRequests], so a retry's token is visible. */
+    val animeListAuthorizations: MutableList<String> = mutableListOf()
 
     val engine: MockEngine = MockEngine { request ->
         when {
@@ -103,6 +132,35 @@ class FakeMal(
 
                     is RefreshResponse.ServerError -> respondError(r.status)
                     RefreshResponse.TransportFailure -> throw IOException("connection reset")
+                }
+            }
+
+            request.url.encodedPath.endsWith("/users/@me/animelist") -> {
+                animeListRequests += request.url
+                animeListAuthorizations += request.headers[HttpHeaders.Authorization].orEmpty()
+                val presented = request.headers[HttpHeaders.Authorization]?.removePrefix("Bearer ")
+                if (presented == null || presented !in acceptedAccessTokens) {
+                    respond(
+                        content = """{"error":"invalid_token","message":"expired"}""",
+                        status = HttpStatusCode.Unauthorized,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                } else {
+                    when (val r = animeList(request.url.parameters["offset"]?.toInt() ?: 0)) {
+                        is AnimeListResponse.Page -> respond(
+                            content = r.json(),
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                        )
+
+                        is AnimeListResponse.Failure -> respond(
+                            content = """{"error":"server_error","message":"boom"}""",
+                            status = r.status,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                        )
+
+                        AnimeListResponse.TransportFailure -> throw IOException("connection reset")
+                    }
                 }
             }
 

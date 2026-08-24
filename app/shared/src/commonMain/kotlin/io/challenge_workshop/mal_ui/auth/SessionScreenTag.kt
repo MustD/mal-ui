@@ -27,3 +27,12 @@ enum class SessionScreenTag {
  * is no other way to pick one paragraph out of a screen without pinning the test to its copy.
  */
 val SIGNED_OUT_REASON_TAG: String = "${SessionScreenTag.SignIn.tag}.reason"
+
+/**
+ * The Anime List on the signed-in screen.
+ *
+ * Derived from [SessionScreenTag.SignedIn] rather than being a scheme of its own: the thing worth
+ * asserting is that the signed-in branch renders the list, so the two names should not be able to
+ * drift apart.
+ */
+val ANIME_LIST_TAG: String = "${SessionScreenTag.SignedIn.tag}.animeList"

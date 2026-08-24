@@ -1,5 +1,6 @@
 package io.challenge_workshop.mal_ui.session
 
+import io.challenge_workshop.mal_ui.animelist.MalAnimeListClient
 import io.challenge_workshop.mal_ui.mal.HttpClientFactory
 import io.challenge_workshop.mal_ui.mal.MalAuthClient
 import io.challenge_workshop.mal_ui.mal.MalAuthConfig
@@ -76,6 +77,19 @@ class MalSessionRepository(
             }
         }
     }
+
+    /**
+     * A client for the Anime List, on the **one** authenticated [HttpClient] this repository owns.
+     *
+     * Handing out a client rather than growing a second one is the whole point: two Ktor `Auth`
+     * providers over one token store means two `AuthTokenHolder` caches, and therefore the refresh
+     * race warned about above — which does not fail loudly, it just occasionally loses a Session.
+     *
+     * Cheap to call: the client is a thin wrapper over the shared [HttpClient] and owns nothing, so
+     * it needs no closing. It reads the *current* `apiBaseUrl`, which on web is the Relay's.
+     */
+    fun animeListClient(): MalAnimeListClient =
+        MalAnimeListClient(apiBaseUrl = _config.value.apiBaseUrl, http = authenticatedHttp)
 
     private fun tokenApi() = MalAuthClient(_config.value, tokenHttp, ownsHttpClient = false)
 

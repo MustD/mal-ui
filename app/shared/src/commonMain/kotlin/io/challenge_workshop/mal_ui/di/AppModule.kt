@@ -1,5 +1,6 @@
 package io.challenge_workshop.mal_ui.di
 
+import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
 import io.challenge_workshop.mal_ui.auth.StartupRedirect
 import io.challenge_workshop.mal_ui.mal.HttpClientFactory
@@ -52,6 +53,10 @@ val appModule: Module = module {
     // scoped to the composition's ViewModelStore like any other ViewModel; everything durable it
     // touches lives in the repository singleton above, so being recreated costs nothing.
     viewModel { MalSessionViewModel(repository = get(), startupRedirect = get()) }
+
+    // Also a `viewModel`, and it takes the repository rather than a client of its own: the pager it
+    // builds must ride the one authenticated `HttpClient` that owns refresh.
+    viewModel { AnimeListViewModel(repository = get()) }
 }
 
 /**

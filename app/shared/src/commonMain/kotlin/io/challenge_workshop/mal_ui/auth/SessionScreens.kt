@@ -23,6 +23,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -32,6 +33,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.challenge_workshop.mal_ui.animelist.AnimeListSection
+import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.session.SessionState
 import io.challenge_workshop.mal_ui.session.SignedOutReason
 
@@ -185,11 +189,18 @@ fun AuthorizingScreen(
     }
 }
 
-/** The shell. No feature screens, and no MAL API call beyond `/users/@me`. */
+/**
+ * The signed-in screen, which **is** the Anime List.
+ *
+ * The profile row and the debug panel are still here, above and below it respectively. Ticket 09
+ * rehouses both into a top app bar and an overflow menu; until it does, neither may be lost —
+ * `SessionDebugPanel` is the only way a human ever sees the refresh path execute.
+ */
 @Composable
 fun SignedInScreen(
     state: SessionState.SignedIn,
     viewModel: MalSessionViewModel,
+    animeList: AnimeListViewModel,
     modifier: Modifier = Modifier,
 ) {
     ScreenColumn(modifier) {
@@ -220,12 +231,18 @@ fun SignedInScreen(
 
         HorizontalDivider()
 
-        Text(
-            "Signed in. There is nothing else here yet — this build is a shell around the " +
-                "authentication work.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        // Not in the ViewModel's `init`: the pager must only ask MAL for a list once there is a
+        // signed-in screen to show one on. The pager itself ignores a repeat, so a recomposition
+        // costs nothing.
+        LaunchedEffect(Unit) { animeList.loadFirstPage() }
+        AnimeListSection(
+            state = animeList.state.collectAsStateWithLifecycle().value,
+            onRetry = animeList::retry,
+            modifier = Modifier.testTag(ANIME_LIST_TAG),
         )
+
+        HorizontalDivider()
+
         OutlinedButton(onClick = viewModel::refreshUser, enabled = !viewModel.busy) {
             Text("Reload profile")
         }
@@ -273,8 +290,9 @@ private fun ScreenColumn(modifier: Modifier = Modifier, content: @Composable () 
     }
 }
 
+/** Internal, not private: the Anime List reuses it rather than growing an error card of its own. */
 @Composable
-private fun ErrorCard(title: String, body: String) {
+internal fun ErrorCard(title: String, body: String) {
     MessageCard(
         title = title,
         body = body,

@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.auth.AuthRedirectChannel
 import io.challenge_workshop.mal_ui.auth.AuthorizingScreen
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
@@ -27,10 +28,13 @@ import org.koin.compose.viewmodel.koinViewModel
  * started Koin would fail at render time rather than usefully show anything.
  */
 @Composable
-fun App(viewModel: MalSessionViewModel = koinViewModel()) {
+fun App(
+    viewModel: MalSessionViewModel = koinViewModel(),
+    animeList: AnimeListViewModel = koinViewModel(),
+) {
     MaterialTheme {
         Surface(modifier = Modifier) {
-            SessionRoute(viewModel.state.collectAsStateWithLifecycle().value, viewModel)
+            SessionRoute(viewModel.state.collectAsStateWithLifecycle().value, viewModel, animeList)
         }
     }
 }
@@ -47,12 +51,20 @@ fun App(viewModel: MalSessionViewModel = koinViewModel()) {
  * No `modifier` parameter: both call sites are in this file and neither has anything to pass, and
  * one that existed only to be overwritten by `testTag` below would be a lie about the seam.
  *
+ * [animeList] is a parameter rather than a `koinViewModel()` call inside the signed-in branch, so
+ * this function can be rendered at a chosen state by a test without a started Koin — the same reason
+ * [state] is one.
+ *
  * The [AuthRedirectChannel] is remembered *here*, above the `when`, and not in [SignInScreen]: starting
  * a sign-in swaps that screen out for [AuthorizingScreen], and a channel that left composition at that
  * moment would take an Android `ActivityResultLauncher` with it.
  */
 @Composable
-internal fun SessionRoute(state: SessionState, viewModel: MalSessionViewModel) {
+internal fun SessionRoute(
+    state: SessionState,
+    viewModel: MalSessionViewModel,
+    animeList: AnimeListViewModel,
+) {
     val channel = rememberAuthRedirectChannel()
 
     when (state) {
@@ -66,6 +78,6 @@ internal fun SessionRoute(state: SessionState, viewModel: MalSessionViewModel) {
             AuthorizingScreen(state, viewModel, Modifier.testTag(SessionScreenTag.Authorizing.tag))
 
         is SessionState.SignedIn ->
-            SignedInScreen(state, viewModel, Modifier.testTag(SessionScreenTag.SignedIn.tag))
+            SignedInScreen(state, viewModel, animeList, Modifier.testTag(SessionScreenTag.SignedIn.tag))
     }
 }

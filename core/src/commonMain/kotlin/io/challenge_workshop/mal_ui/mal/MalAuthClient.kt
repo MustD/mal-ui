@@ -2,16 +2,12 @@ package io.challenge_workshop.mal_ui.mal
 
 import io.ktor.client.HttpClient
 import io.ktor.client.HttpClientConfig
-import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.forms.submitForm
 import io.ktor.client.request.get
 import io.ktor.client.request.header
-import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.URLBuilder
-import io.ktor.http.isSuccess
 import io.ktor.http.parameters
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
@@ -62,8 +58,6 @@ class MalAuthClient(
     /** True when this instance owns [http] and should close it in [close]. */
     private val ownsHttpClient: Boolean = true,
 ) {
-    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
-
     /** Step 1: mint a PKCE verifier plus the URL to send the user to. */
     fun beginAuthorization(): MalAuthRequest =
         authorizationFor(Pkce.generateCodeVerifier(), Pkce.generateState())
@@ -126,7 +120,7 @@ class MalAuthClient(
         } catch (e: Exception) {
             throw MalAuthException("Could not reach the MAL API: ${e.message}", cause = e)
         }
-        return decodeOrThrow(response)
+        return response.decodeOrThrow()
     }
 
     private suspend fun postToken(
@@ -146,64 +140,7 @@ class MalAuthClient(
         } catch (e: Exception) {
             throw MalAuthException("Could not reach the MAL token endpoint: ${e.message}", cause = e)
         }
-        return decodeOrThrow(response)
-    }
-
-    private suspend inline fun <reified T> decodeOrThrow(response: HttpResponse): T {
-        if (!response.status.isSuccess()) throw response.toMalException()
-        return try {
-            response.body()
-        } catch (e: Exception) {
-            throw MalAuthException(
-                "MAL returned a ${response.status.value} but the body did not parse: ${e.message}",
-                status = response.status.value,
-                cause = e,
-            )
-        }
-    }
-
-    private suspend fun HttpResponse.toMalException(): MalAuthException {
-        val raw = runCatching { bodyAsText() }.getOrDefault("")
-        val parsed = runCatching { json.decodeFromString<MalErrorBody>(raw) }.getOrNull()
-        val detail = listOfNotNull(parsed?.message, parsed?.hint)
-            .distinct()
-            .joinToString(" — ")
-            .ifBlank { raw.take(300).ifBlank { "no response body" } }
-        return MalAuthException(
-            message = buildString {
-                append("MAL rejected the request (HTTP ${status.value}")
-                parsed?.error?.let { append(", $it") }
-                append("): ")
-                append(detail)
-                append(hintFor(parsed?.error))
-            },
-            status = status.value,
-            errorCode = parsed?.error,
-        )
-    }
-
-    /** MAL's error codes are terse; these are the ones that actually bite during setup. */
-    private fun hintFor(errorCode: String?): String = when (errorCode) {
-        // MAL reports a *Redirect URI* mismatch as 401 invalid_client / "Client authentication
-        // failed", which implicates the Client ID and costs an hour of debugging. Naming both
-        // possibilities here is the whole point of the hint.
-        "invalid_client" ->
-            "\n\nTwo possible causes. Either the Client ID is wrong — and if the app was registered " +
-                    "with App Type `web`, MAL issued a Client Secret and requires it here too. Or the " +
-                    "redirect_uri does not byte-exactly match one registered on the app: MAL reports " +
-                    "a Redirect URI mismatch as this same 401 invalid_client, which points at the " +
-                    "Client ID and not at the URI. A trailing slash, a changed port or a case " +
-                    "difference is enough."
-
-        "invalid_request" ->
-            "\n\nUsually a redirect_uri mismatch: it must match a URL registered on the app exactly, " +
-                    "and be sent to both the authorize and token endpoints or neither."
-
-        "invalid_grant" ->
-            "\n\nThe code was already used, expired, or the code_verifier does not match. " +
-                    "Authorization codes are single-use — start the login again."
-
-        else -> ""
+        return response.decodeOrThrow()
     }
 
     fun close() {

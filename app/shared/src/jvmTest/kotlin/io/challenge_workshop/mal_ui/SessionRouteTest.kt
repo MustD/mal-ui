@@ -19,13 +19,17 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.text.AnnotatedString
+import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListener
 import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListenerTest
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
 import io.challenge_workshop.mal_ui.auth.StartupRedirect
 import io.challenge_workshop.mal_ui.auth.awaitLoopbackPortFree
 import io.challenge_workshop.mal_ui.auth.SIGNED_OUT_REASON_TAG
+import io.challenge_workshop.mal_ui.auth.ANIME_LIST_TAG
+import io.challenge_workshop.mal_ui.auth.FAKE_MAL_ANIME_TITLES
 import io.challenge_workshop.mal_ui.auth.SessionScreenTag
+import io.challenge_workshop.mal_ui.auth.fakeMal
 import io.challenge_workshop.mal_ui.mal.DESKTOP_LOOPBACK_PORT
 import io.challenge_workshop.mal_ui.mal.DESKTOP_REDIRECT_URI
 import io.challenge_workshop.mal_ui.mal.MalAuthConfig
@@ -66,14 +70,22 @@ class SessionRouteTest {
     private lateinit var store: JsonTokenStore
     private lateinit var repository: MalSessionRepository
     private lateinit var viewModel: MalSessionViewModel
+    private lateinit var animeList: AnimeListViewModel
 
     @BeforeTest
     fun setUp() {
         // viewModelScope runs on Dispatchers.Main, which the JVM test platform does not provide.
         Dispatchers.setMain(UnconfinedTestDispatcher())
         store = JsonTokenStore(FakeKeyValueStore())
-        repository = MalSessionRepository(store, initialConfig = MalAuthConfig(clientId = "a-client-id"))
+        repository = MalSessionRepository(
+            store,
+            initialConfig = MalAuthConfig(clientId = "a-client-id"),
+            // Not the default factory: the signed-in screen loads the Anime List as soon as it is
+            // composed, and a unit test must not make that a real request to myanimelist.net.
+            clientFactory = fakeMal(),
+        )
         viewModel = MalSessionViewModel(repository, StartupRedirect.None)
+        animeList = AnimeListViewModel(repository)
     }
 
     @AfterTest
@@ -103,7 +115,7 @@ class SessionRouteTest {
     fun every_session_state_renders_one_screen_with_something_on_it() {
         for ((state, expected) in cases) {
             runComposeUiTest {
-                setContent { SessionRoute(state, viewModel) }
+                setContent { SessionRoute(state, viewModel, animeList) }
 
                 onNodeWithTag(expected.tag).assertIsDisplayed()
                 for (other in SessionScreenTag.entries - expected) {
@@ -136,7 +148,7 @@ class SessionRouteTest {
         val explanations = SignedOutReason.entries.associateWith { reason ->
             var text = ""
             runComposeUiTest {
-                setContent { SessionRoute(SessionState.SignedOut(reason), viewModel) }
+                setContent { SessionRoute(SessionState.SignedOut(reason), viewModel, animeList) }
                 text = onNodeWithTag(SIGNED_OUT_REASON_TAG).textContent()
             }
             text
@@ -177,7 +189,7 @@ class SessionRouteTest {
             setContent {
                 // Otherwise the desktop `UriHandler` really does launch a browser from a unit test.
                 CompositionLocalProvider(LocalUriHandler provides RecordingUriHandler(opened)) {
-                    SessionRoute(viewModel.state.collectAsState().value, viewModel)
+                    SessionRoute(viewModel.state.collectAsState().value, viewModel, animeList)
                 }
             }
 
@@ -222,7 +234,7 @@ class SessionRouteTest {
             @Suppress("DEPRECATION")
             setContent {
                 CompositionLocalProvider(LocalClipboardManager provides clipboard) {
-                    SessionRoute(SessionState.Authorizing(pending), viewModel)
+                    SessionRoute(SessionState.Authorizing(pending), viewModel, animeList)
                 }
             }
 
@@ -232,10 +244,54 @@ class SessionRouteTest {
         }
     }
 
+    /**
+     * The signed-in branch is the Anime List now, so "it renders something" is no longer enough:
+     * what has to be on screen is the user's own entries, fetched through the repository's
+     * authenticated client. The fetch is real — [fakeMal] answers it — so this covers the whole path
+     * from a MAL response to a row, which is the ticket's tracer bullet.
+     */
+    @Test
+    fun the_signed_in_screen_renders_the_anime_list() {
+        runComposeUiTest {
+            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
+
+            waitUntil("the first page lands", WAIT_MS) {
+                animeList.state.value.entries.size == FAKE_MAL_ANIME_TITLES.size
+            }
+
+            onNodeWithTag(ANIME_LIST_TAG).assertIsDisplayed()
+            for (title in FAKE_MAL_ANIME_TITLES) {
+                onNodeWithText(title).assertIsDisplayed()
+            }
+            // Watched-of-total, which is the other half of what a row is for.
+            onNodeWithText("3 / 26").assertIsDisplayed()
+        }
+    }
+
+    /**
+     * The Anime List taking over the signed-in screen must not cost the two things that were on it.
+     * Ticket 09 rehouses both into a top app bar; until then they are simply still here, and this is
+     * what says so.
+     */
+    @Test
+    fun sign_out_and_the_debug_panel_survive_the_anime_list_arriving() {
+        runComposeUiTest {
+            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
+
+            waitUntil("the first page lands", WAIT_MS) { animeList.state.value.loaded }
+
+            onNodeWithText("Sign out").assertIsDisplayed()
+            onNodeWithText("Session diagnostics").assertIsDisplayed()
+        }
+    }
+
     @Test
     fun the_debug_panel_starts_collapsed() {
         runComposeUiTest {
-            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel) }
+            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
+            // The Anime List loads asynchronously above the panel. Clicking before it lands aims at
+            // where the panel *was*, and the list then pushes it out from under the click.
+            waitUntil("the Anime List settles", WAIT_MS) { animeList.state.value.loaded }
 
             onNodeWithText("Session diagnostics").assertIsDisplayed()
             // "Force 401" writes an invalid token into the store, so it must not be a stray tap away.
@@ -260,7 +316,8 @@ class SessionRouteTest {
                 MalTokens("Bearer", 2_415_600, "a-valid-access-token", "a-refresh-token"),
                 MalUser(1, "someone"),
             )
-            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel) }
+            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
+            waitUntil("the Anime List settles", WAIT_MS) { animeList.state.value.loaded }
             onNodeWithText("Session diagnostics").performClick()
 
             onNodeWithText("Force 401").performClick()
