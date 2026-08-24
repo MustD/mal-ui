@@ -59,6 +59,35 @@ secret (a public client has no secret, and `MalAuthConfig.clientSecret` exists o
 Why a Session is absent — never signed in, signed out deliberately, a refresh MAL rejected, or an authorization that
 failed. Carried so the UI can explain itself rather than showing a bare "signed out".
 
+### Anime List
+
+**Anime List**:
+The user's own collection on MyAnimeList — every anime they have added, whatever they did with it. MAL's own word for
+it, and the thing this app's signed-in screen shows. _Avoid_: Library, collection, watchlist (a watchlist is at most the
+Plan to Watch slice of one)
+
+**List Entry**:
+One anime together with *this user's* relationship to it — Watch Status, score, episodes watched, when they last touched
+it. The unit the Anime List is made of, and the thing filtering and ordering operate on. An anime nobody has added has
+no List Entry. _Avoid_: Item, row, anime (an anime exists independently of anyone's list)
+
+**Watch Status**:
+The user's own disposition towards an anime: watching, completed, on hold, dropped, or plan to watch. Exactly one per
+List Entry. _Avoid_: **Status**, unqualified — MAL's API calls this `status` and calls **Airing Status** `status` too,
+which is precisely how the two get confused
+
+**Airing Status**:
+The anime's own state in the world: currently airing, finished airing, or not yet aired. A property of the anime, true
+for everyone, and unrelated to what any user did with it. _Avoid_: Status, unqualified — see **Watch Status**
+
+**Sort Order**:
+The chosen ordering of an Anime List, as a whole — the field and its direction together, not two independent settings.
+_Avoid_: Sorting, order by
+
+**Layout**:
+Which shape the Anime List is drawn in — cards or list. A presentation choice that changes no data and no query.
+_Avoid_: View, mode (a "view" in a Compose codebase is an Android widget)
+
 ### Platform
 
 **Relay**:
