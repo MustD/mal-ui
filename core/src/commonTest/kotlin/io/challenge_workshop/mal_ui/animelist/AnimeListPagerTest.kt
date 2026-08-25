@@ -7,6 +7,9 @@ import io.ktor.client.HttpClient
 import io.ktor.client.plugins.DefaultRequest
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -33,8 +36,13 @@ class AnimeListPagerTest {
         pageSize: Int = 50,
         watchStatus: WatchStatus? = null,
         sortOrder: AnimeListSortOrder = AnimeListSortOrder.LastUpdated,
+        holdAnimeList: suspend (Int) -> Unit = {},
     ): Pair<AnimeListPager, FakeMal> {
-        val mal = FakeMal(acceptedAccessToken = accessToken, animeList = animeList)
+        val mal = FakeMal(
+            acceptedAccessToken = accessToken,
+            animeList = animeList,
+            holdAnimeList = holdAnimeList,
+        )
         // No `Auth` plugin here: this test is about the pager, and the plugin's behaviour is
         // `MalSessionRefreshTest`'s. `MalSessionAnimeListTest` covers the two meeting.
         val http = HttpClient(mal.engine) {
@@ -187,6 +195,68 @@ class AnimeListPagerTest {
             "the second page must be appended after the first, in order",
         )
         assertEquals(listOf("0", "2"), mal.animeListRequests.map { it.parameters["offset"] })
+    }
+
+    /**
+     * A fast scroll fires the proximity trigger on every frame it is near the end, so the guard that
+     * matters is not "the UI asks once" — it is that the pager answers once however often it is
+     * asked.
+     *
+     * The second `next()` is issued while the first is genuinely suspended inside its request, which
+     * is the only window in which the duplicate could happen. What is asserted is the requests MAL
+     * saw, because a duplicate costs a wasted page and a doubled append, not a flag.
+     */
+    @Test
+    fun a_page_already_in_flight_is_not_requested_twice() = runTest {
+        val secondPageLanded = CompletableDeferred<Unit>()
+        val (pager, mal) = pagerOver(
+            pageSize = 2,
+            animeList = { offset -> AnimeListResponse.Page(fakeEntries(2, firstId = offset + 1L), hasMore = true) },
+            holdAnimeList = { offset -> if (offset > 0) secondPageLanded.await() },
+        )
+        pager.loadFirstPage()
+
+        val inFlight = backgroundScope.launch { pager.next() }
+        pager.state.first { it.loadingMore }
+
+        pager.next()
+
+        secondPageLanded.complete(Unit)
+        inFlight.join()
+        assertEquals(
+            listOf("0", "2"),
+            mal.animeListRequests.map { it.parameters["offset"] },
+            "the second `next()` landed while offset=2 was in flight and must have been a no-op",
+        )
+        assertContentEquals(listOf(1L, 2L, 3L, 4L), pager.state.value.entries.map { it.animeId })
+    }
+
+    /**
+     * The scroll trigger keeps firing while the user sits at the bottom, so a failed later page
+     * must not be re-requested by proximity alone — that is a request loop against a MAL that is
+     * already failing. Recovering from it is [AnimeListPager.retry], which the user asks for.
+     */
+    @Test
+    fun next_makes_no_request_while_a_failed_later_page_is_still_showing_its_error() = runTest {
+        val (pager, mal) = pagerOver(
+            pageSize = 2,
+            animeList = { offset ->
+                if (offset > 0) AnimeListResponse.TransportFailure
+                else AnimeListResponse.Page(fakeEntries(2), hasMore = true)
+            },
+        )
+        pager.loadFirstPage()
+        pager.next()
+        assertNotNull(pager.state.value.moreError)
+
+        pager.next()
+        pager.next()
+
+        assertEquals(
+            listOf("0", "2"),
+            mal.animeListRequests.map { it.parameters["offset"] },
+            "a standing 'more failed' must not be retried by scrolling",
+        )
     }
 
     @Test

@@ -3,12 +3,15 @@ package io.challenge_workshop.mal_ui.auth
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeContentPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -34,8 +37,9 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.challenge_workshop.mal_ui.animelist.AnimeListSection
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
+import io.challenge_workshop.mal_ui.animelist.LoadMoreWhenNearEnd
+import io.challenge_workshop.mal_ui.animelist.animeListItems
 import io.challenge_workshop.mal_ui.session.SessionState
 import io.challenge_workshop.mal_ui.session.SignedOutReason
 
@@ -192,9 +196,22 @@ fun AuthorizingScreen(
 /**
  * The signed-in screen, which **is** the Anime List.
  *
- * The profile row and the debug panel are still here, above and below it respectively. Ticket 09
- * rehouses both into a top app bar and an overflow menu; until it does, neither may be lost —
- * `SessionDebugPanel` is the only way a human ever sees the refresh path execute.
+ * **One scroll container, and it is lazy.** The Anime List is unbounded now — scrolling near its end
+ * fetches the next page — and a lazy list cannot be nested inside a scrolling [Column], so the
+ * chrome around the list became items in the list rather than the list becoming a child of the
+ * chrome. That is also what gives the paging trigger a `LazyListState` to read the last-visible
+ * index off, which is the one signal that means the same thing on all four Targets.
+ *
+ * **All of that chrome sits *above* the entries, and that is not a layout preference.** Anything
+ * placed after them is unreachable on a real account: every scroll towards it enters the prefetch
+ * zone, appends fifty more entries and pushes it further down, so it only arrives once the whole
+ * list has been paged in. Above the entries it is always one scroll up, and scrolling up never
+ * fetches anything.
+ *
+ * The profile row and the debug panel are therefore both up there. Ticket 09 rehouses them into a
+ * top app bar and an overflow menu — which is where they are heading anyway; until it does, neither
+ * may be lost, because `SessionDebugPanel` is the only way a human ever sees the refresh path
+ * execute.
  */
 @Composable
 fun SignedInScreen(
@@ -203,54 +220,79 @@ fun SignedInScreen(
     animeList: AnimeListViewModel,
     modifier: Modifier = Modifier,
 ) {
-    ScreenColumn(modifier) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+    val listState = rememberLazyListState()
+    val list = animeList.state.collectAsStateWithLifecycle().value
+
+    // Not in the ViewModel's `init`: the pager must only ask MAL for a list once there is a
+    // signed-in screen to show one on. The pager itself ignores a repeat, so a recomposition
+    // costs nothing.
+    LaunchedEffect(Unit) { animeList.loadFirstPage() }
+    // Armed on `loaded`, not on "there are entries": a first page can come back empty and still
+    // carry a `paging.next`, and a pager that is not exhausted with no way left to ask it for more
+    // is a list that has silently stopped. Disarmed once exhausted, so the trigger costs nothing at
+    // the bottom of a finished list.
+    LoadMoreWhenNearEnd(
+        listState = listState,
+        loadedCount = list.entries.size,
+        enabled = list.loaded && !list.exhausted,
+        onLoadMore = animeList::loadMore,
+    )
+
+    // The screen tag is on this wrapper rather than on the list, because the list carries its own
+    // and a second `testTag` would replace it.
+    Box(modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .safeContentPadding()
+                .testTag(ANIME_LIST_TAG),
+            state = listState,
+            contentPadding = PaddingValues(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    state.user?.name ?: "Signed in",
-                    style = MaterialTheme.typography.headlineSmall,
-                    overflow = TextOverflow.Ellipsis,
-                    maxLines = 1,
-                )
-                state.user?.let {
-                    Text(
-                        "MAL id ${it.id}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            item {
+                Column(Modifier.paneItem(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                state.user?.name ?: "Signed in",
+                                style = MaterialTheme.typography.headlineSmall,
+                                overflow = TextOverflow.Ellipsis,
+                                maxLines = 1,
+                            )
+                            state.user?.let {
+                                Text(
+                                    "MAL id ${it.id}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        // A refresh must not unmount this screen, so it shows as a spinner beside
+                        // the name.
+                        if (state.refreshing) CircularProgressIndicator(Modifier.padding(4.dp))
+                        TextButton(onClick = viewModel::signOut, enabled = !viewModel.busy) {
+                            Text("Sign out")
+                        }
+                    }
+                    OutlinedButton(onClick = viewModel::refreshUser, enabled = !viewModel.busy) {
+                        Text("Reload profile")
+                    }
+                    // Above the list rather than at the bottom of it, so a failed sign-out or
+                    // profile reload is visible from where the user actually is.
+                    viewModel.error?.let { ErrorCard("Something went wrong", it) }
+                    SessionDebugPanel(viewModel)
+                    HorizontalDivider()
                 }
             }
-            // A refresh must not unmount this screen, so it shows as a spinner beside the name.
-            if (state.refreshing) CircularProgressIndicator(Modifier.padding(4.dp))
-            TextButton(onClick = viewModel::signOut, enabled = !viewModel.busy) { Text("Sign out") }
+
+            animeListItems(state = list, onRetry = animeList::retry, itemModifier = Modifier.paneItem())
         }
-
-        HorizontalDivider()
-
-        // Not in the ViewModel's `init`: the pager must only ask MAL for a list once there is a
-        // signed-in screen to show one on. The pager itself ignores a repeat, so a recomposition
-        // costs nothing.
-        LaunchedEffect(Unit) { animeList.loadFirstPage() }
-        AnimeListSection(
-            state = animeList.state.collectAsStateWithLifecycle().value,
-            onRetry = animeList::retry,
-            modifier = Modifier.testTag(ANIME_LIST_TAG),
-        )
-
-        HorizontalDivider()
-
-        OutlinedButton(onClick = viewModel::refreshUser, enabled = !viewModel.busy) {
-            Text("Reload profile")
-        }
-
-        viewModel.error?.let { ErrorCard("Something went wrong", it) }
-
-        HorizontalDivider()
-        SessionDebugPanel(viewModel)
     }
 }
 
@@ -282,13 +324,22 @@ private fun ScreenColumn(modifier: Modifier = Modifier, content: @Composable () 
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Column(
-            modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(),
+            modifier = Modifier.paneItem(),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             content()
         }
     }
 }
+
+/**
+ * The width one column of this app's content gets: as wide as the window, up to a line length that
+ * is still readable on a desktop or a browser maximised across a monitor.
+ *
+ * A modifier rather than a wrapper composable, because the signed-in screen's content is now lazy
+ * items and there is no single node left to wrap.
+ */
+internal fun Modifier.paneItem(): Modifier = widthIn(max = 560.dp).fillMaxWidth()
 
 /** Internal, not private: the Anime List reuses it rather than growing an error card of its own. */
 @Composable

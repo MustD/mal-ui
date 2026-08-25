@@ -77,10 +77,20 @@ class AnimeListPager(
         load()
     }
 
-    /** The next page, unless the list is exhausted or a request is already in flight. */
+    /**
+     * The next page, unless the list is exhausted, a request is already in flight, or the last one
+     * failed.
+     *
+     * Driven by proximity to the end of the list rather than by a button, so it is asked on every
+     * frame the user spends near the bottom. All four guards are therefore about the same thing:
+     * being asked repeatedly must cost at most one request. The failure guard is the one with teeth
+     * — a user parked at the bottom of a failed page would otherwise hammer a MAL that is already
+     * failing, forever. [retry] is the way back out of that, and a person asks for it.
+     */
     suspend fun next() {
         val current = _state.value
         if (current.exhausted || current.loadingFirstPage || current.loadingMore) return
+        if (current.moreError != null || current.firstPageError != null) return
         load()
     }
 

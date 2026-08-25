@@ -37,17 +37,43 @@ internal val FAKE_MAL_USER: MalUser = MalUser(id = 42, name = "someone")
  */
 internal val FAKE_MAL_ANIME_TITLES: List<String> = listOf("Cowboy Bebop", "Mushishi")
 
-private val ANIME_LIST_JSON: String = FAKE_MAL_ANIME_TITLES.mapIndexed { index, title ->
-    """{"node":{"id":${index + 1},"title":"$title","num_episodes":26,"media_type":"tv",""" +
-        """"status":"finished_airing"},"list_status":{"status":"watching","score":8,""" +
-        """"num_episodes_watched":${index + 3},"updated_at":"2026-08-01T12:00:00+00:00"}}"""
-}.joinToString(",", prefix = """{"data":[""", postfix = """],"paging":{}}""")
+/** One page of [titles], as MAL would send it for the `offset` and `limit` that were asked for. */
+private fun animeListJson(titles: List<String>, offset: Int, limit: Int): String {
+    val page = titles.drop(offset).take(limit)
+    val rows = page.mapIndexed { index, title ->
+        val id = offset + index + 1
+        """{"node":{"id":$id,"title":"$title","num_episodes":26,"media_type":"tv",""" +
+            """"status":"finished_airing"},"list_status":{"status":"watching","score":8,""" +
+            """"num_episodes_watched":${(index % 3) + 3},"updated_at":"2026-08-01T12:00:00+00:00"}}"""
+    }.joinToString(",")
+    // The absolute `api.myanimelist.net` URL MAL really sends, and only while entries remain: its
+    // presence is the whole of "there is more", and its absence is what exhausts the pager.
+    val paging = if (offset + limit < titles.size) {
+        """{"next":"https://api.myanimelist.net/v2/users/@me/animelist?offset=${offset + limit}"}"""
+    } else {
+        "{}"
+    }
+    return """{"data":[$rows],"paging":$paging}"""
+}
 
 /**
+ * @param animeListTitles the whole Anime List this fake holds, paged off the request's own `offset`
+ * and `limit` rather than off a size fixed here — so a test about paging is testing the offsets the
+ * app actually drives. The default is short enough to fit one page, which is what every test that
+ * is not about paging wants.
+ * @param failAnimeListAt asked for each Anime List request's `offset`. Answering true makes MAL
+ * fail that page — which is a different screen from a failed first page, and the only way to reach
+ * the retry at the bottom of the list. Consulted per request rather than fixed, so a test can let
+ * the retry succeed.
  * @param onRequest every request, before it is answered. For counting: "did that redirect produce a
- * second token exchange" is otherwise only inferable from a downstream error.
+ * second token exchange" is otherwise only inferable from a downstream error. Last, so it stays
+ * reachable as a trailing lambda.
  */
-internal fun fakeMal(onRequest: (HttpRequestData) -> Unit = {}): HttpClientFactory {
+internal fun fakeMal(
+    animeListTitles: List<String> = FAKE_MAL_ANIME_TITLES,
+    failAnimeListAt: (Int) -> Boolean = { false },
+    onRequest: (HttpRequestData) -> Unit = {},
+): HttpClientFactory {
     val engine = MockEngine { request ->
         onRequest(request)
         val json = headersOf(HttpHeaders.ContentType, "application/json")
@@ -59,11 +85,22 @@ internal fun fakeMal(onRequest: (HttpRequestData) -> Unit = {}): HttpClientFacto
                 headers = json,
             )
 
-            request.url.encodedPath.endsWith("/users/@me/animelist") -> respond(
-                content = ANIME_LIST_JSON,
-                status = HttpStatusCode.OK,
-                headers = json,
-            )
+            request.url.encodedPath.endsWith("/users/@me/animelist") -> {
+                val offset = request.url.parameters["offset"]?.toInt() ?: 0
+                if (failAnimeListAt(offset)) {
+                    respondError(HttpStatusCode.ServiceUnavailable, "boom")
+                } else {
+                    respond(
+                        content = animeListJson(
+                            titles = animeListTitles,
+                            offset = offset,
+                            limit = request.url.parameters["limit"]?.toInt() ?: animeListTitles.size,
+                        ),
+                        status = HttpStatusCode.OK,
+                        headers = json,
+                    )
+                }
+            }
 
             request.url.encodedPath.endsWith("/users/@me") -> respond(
                 content = """{"id":${FAKE_MAL_USER.id},"name":"${FAKE_MAL_USER.name}"}""",

@@ -87,6 +87,13 @@ class FakeMal(
     acceptedAccessToken: String? = null,
     /** How the fake answers `/users/@me/animelist`, given the `offset` that was asked for. */
     private val animeList: (Int) -> AnimeListResponse = { AnimeListResponse.Page(emptyList(), hasMore = false) },
+    /**
+     * Called with the `offset` of each Anime List request before it is answered. Suspend in here to
+     * hold that one page in flight: without a way to do that every request completes before the
+     * next line of the test runs, and "a page already in flight is not requested twice" has no
+     * in-flight page to be asked about twice.
+     */
+    private val holdAnimeList: suspend (Int) -> Unit = {},
 ) {
     var tokenEndpointHits: Int = 0
         private set
@@ -138,6 +145,7 @@ class FakeMal(
             request.url.encodedPath.endsWith("/users/@me/animelist") -> {
                 animeListRequests += request.url
                 animeListAuthorizations += request.headers[HttpHeaders.Authorization].orEmpty()
+                holdAnimeList(request.url.parameters["offset"]?.toInt() ?: 0)
                 val presented = request.headers[HttpHeaders.Authorization]?.removePrefix("Bearer ")
                 if (presented == null || presented !in acceptedAccessTokens) {
                     respond(

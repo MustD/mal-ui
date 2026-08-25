@@ -31,6 +31,17 @@ class AnimeListViewModel(repository: MalSessionRepository) : ViewModel() {
         viewModelScope.launch { pager.loadFirstPage() }
     }
 
+    /**
+     * The next page, asked for by proximity to the end of the list rather than by a button.
+     *
+     * Called from a scroll trigger, so it is asked far more often than a page is wanted — every
+     * frame the user spends near the bottom. That is the pager's problem by design: it holds the
+     * in-flight, exhausted and failed guards, so this stays a plain `launch`.
+     */
+    fun loadMore() {
+        viewModelScope.launch { pager.next() }
+    }
+
     fun retry() {
         viewModelScope.launch { pager.retry() }
     }

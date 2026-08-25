@@ -29,10 +29,23 @@ enum class SessionScreenTag {
 val SIGNED_OUT_REASON_TAG: String = "${SessionScreenTag.SignIn.tag}.reason"
 
 /**
- * The Anime List on the signed-in screen.
+ * The Anime List on the signed-in screen — the lazy list itself, which is also the signed-in
+ * screen's one scroll container.
  *
  * Derived from [SessionScreenTag.SignedIn] rather than being a scheme of its own: the thing worth
  * asserting is that the signed-in branch renders the list, so the two names should not be able to
  * drift apart.
+ *
+ * On the *scroll container* rather than on a wrapper, so a test can scroll it. Paging is triggered
+ * by proximity to the end, so a test that cannot scroll cannot reach the behaviour at all.
  */
 val ANIME_LIST_TAG: String = "${SessionScreenTag.SignedIn.tag}.animeList"
+
+/**
+ * The row at the bottom of the Anime List that says whether more is coming.
+ *
+ * Its own tag because it is the only part of the list that is about *paging* rather than about an
+ * entry, and both of the things it can say — loading more, and the retry after a failed later page
+ * — are invisible in an assertion over entries.
+ */
+val ANIME_LIST_MORE_TAG: String = "$ANIME_LIST_TAG.more"

@@ -10,13 +10,17 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onChildren
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.text.AnnotatedString
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
@@ -26,6 +30,7 @@ import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
 import io.challenge_workshop.mal_ui.auth.StartupRedirect
 import io.challenge_workshop.mal_ui.auth.awaitLoopbackPortFree
 import io.challenge_workshop.mal_ui.auth.SIGNED_OUT_REASON_TAG
+import io.challenge_workshop.mal_ui.auth.ANIME_LIST_MORE_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_TAG
 import io.challenge_workshop.mal_ui.auth.FAKE_MAL_ANIME_TITLES
 import io.challenge_workshop.mal_ui.auth.SessionScreenTag
@@ -269,6 +274,105 @@ class SessionRouteTest {
     }
 
     /**
+     * Ticket 03's whole point, driven the way a user drives it: by scrolling, not by a button.
+     *
+     * The fake holds 120 entries and pages off the `offset` and `limit` the app actually sends, so
+     * the assertion on the offsets requested is what says **we** drove them — following MAL's
+     * absolute `paging.next` would have gone to api.myanimelist.net and this would not be `[0, 50,
+     * 100]`. Scrolling to the last loaded entry is what the proximity trigger reads, and the third
+     * page arrives without a `paging.next`, which is what has to stop it asking.
+     */
+    @Test
+    fun scrolling_to_the_end_loads_the_next_page_until_the_list_is_exhausted() {
+        val offsets = Collections.synchronizedList(mutableListOf<String>())
+        val paged = pagedRepository(onAnimeListOffset = { offsets += it })
+        val pagedList = AnimeListViewModel(paged)
+        try {
+            runComposeUiTest {
+                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, pagedList) }
+
+                waitUntil("the first page lands", WAIT_MS) { pagedList.state.value.entries.size == 50 }
+                waitForIdle()
+                assertEquals(
+                    listOf("0"),
+                    offsets.toList(),
+                    "a first page that has not been scrolled past must not have fetched a second",
+                )
+
+                scrollToLastLoadedEntry(pagedList)
+                waitUntil("scrolling near the end fetches the second page", WAIT_MS) {
+                    pagedList.state.value.entries.size == 100
+                }
+
+                scrollToLastLoadedEntry(pagedList)
+                waitUntil("and the third", WAIT_MS) { pagedList.state.value.entries.size == 120 }
+
+                assertTrue(
+                    pagedList.state.value.exhausted,
+                    "the last page carried no `paging.next`, so the pager must stop asking",
+                )
+                // Still at the bottom of an exhausted list: the trigger keeps firing and must cost
+                // nothing. Scrolling again is exactly what a user parked at the end does.
+                scrollToLastLoadedEntry(pagedList)
+                waitForIdle()
+                onNodeWithText("Anime 120").assertIsDisplayed()
+                assertEquals(
+                    listOf("0", "50", "100"),
+                    offsets.toList(),
+                    "offsets are driven from our side, once each, and stop at the true end",
+                )
+            }
+        } finally {
+            paged.close()
+        }
+    }
+
+    /**
+     * The other half of an unbounded list: the page that fails on the way down.
+     *
+     * Everything already loaded has to stay exactly where it is — losing 50 entries and the user's
+     * place to a flaky network is the failure this screen state exists to prevent — and the retry
+     * at the bottom has to work, because `AnimeListPager.next()` will not re-request a page that
+     * failed. Without that button a scroll trigger that has given up is a dead end.
+     */
+    @Test
+    fun a_page_that_fails_mid_scroll_keeps_the_list_and_offers_a_retry_that_works() {
+        var failing = true
+        val flaky = pagedRepository(failAnimeListAt = { offset -> offset == 50 && failing })
+        val flakyList = AnimeListViewModel(flaky)
+        try {
+            runComposeUiTest {
+                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, flakyList) }
+                waitUntil("the first page lands", WAIT_MS) { flakyList.state.value.entries.size == 50 }
+
+                scrollToLastLoadedEntry(flakyList)
+                waitUntil("the second page fails", WAIT_MS) { flakyList.state.value.moreError != null }
+
+                assertEquals(
+                    50,
+                    flakyList.state.value.entries.size,
+                    "a failure at the bottom must not discard what is already loaded",
+                )
+                onNodeWithTag(ANIME_LIST_MORE_TAG).assertIsDisplayed()
+
+                failing = false
+                // Fully into view first: the row is at the very bottom, and a click aimed at a node
+                // that is only half on screen lands outside the window. Scrolling here is safe —
+                // the trigger fires and `next()` refuses, which is the guard this ticket added.
+                onNodeWithTag(ANIME_LIST_TAG).performScrollToNode(hasTestTag(ANIME_LIST_MORE_TAG))
+                onNodeWithText("Try again").performClick()
+
+                waitUntil("the retry lands the page that failed", WAIT_MS) {
+                    flakyList.state.value.entries.size == 100
+                }
+                onNodeWithTag(ANIME_LIST_MORE_TAG).assertDoesNotExist()
+            }
+        } finally {
+            flaky.close()
+        }
+    }
+
+    /**
      * The Anime List taking over the signed-in screen must not cost the two things that were on it.
      * Ticket 09 rehouses both into a top app bar; until then they are simply still here, and this is
      * what says so.
@@ -329,6 +433,40 @@ class SessionRouteTest {
             )
             onNodeWithText("deliberately invalidated", substring = true).assertIsDisplayed()
         }
+    }
+
+    /**
+     * A repository over a MAL that holds 120 entries — more than two pages of 50, so paging has a
+     * middle as well as an end. Its own repository rather than [setUp]'s, because the default fake
+     * holds one short page: every other test on this screen wants that, and this one cannot use it.
+     */
+    private fun pagedRepository(
+        failAnimeListAt: (Int) -> Boolean = { false },
+        onAnimeListOffset: (String) -> Unit = {},
+    ) = MalSessionRepository(
+        store,
+        initialConfig = MalAuthConfig(clientId = "a-client-id"),
+        clientFactory = fakeMal(
+            animeListTitles = (1..120).map { "Anime $it" },
+            failAnimeListAt = failAnimeListAt,
+            onRequest = { request ->
+                if (request.url.encodedPath.endsWith("/users/@me/animelist")) {
+                    onAnimeListOffset(request.url.parameters["offset"].orEmpty())
+                }
+            },
+        ),
+    )
+
+    /**
+     * Puts the last loaded entry on screen, which is what the proximity trigger reads.
+     *
+     * By index rather than by text, because the trigger is about *position in the layout* and a
+     * `performScrollToNode` would stop as soon as the node was composed rather than at the end.
+     * The lazy list holds two chrome items above the entries and one below, so the entry count is
+     * always a valid index inside it and always within a screenful of the bottom.
+     */
+    private fun ComposeUiTest.scrollToLastLoadedEntry(animeList: AnimeListViewModel) {
+        onNodeWithTag(ANIME_LIST_TAG).performScrollToIndex(animeList.state.value.entries.size)
     }
 
     /** Stands in for the desktop clipboard, which a unit test must not actually write to. */
