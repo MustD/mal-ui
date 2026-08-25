@@ -18,6 +18,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onChildren
 import androidx.compose.ui.test.onNodeWithTag
@@ -27,7 +28,9 @@ import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.text.AnnotatedString
+import io.challenge_workshop.mal_ui.animelist.ANIME_LIST_SORT_ORDERS
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
+import io.challenge_workshop.mal_ui.animelist.sortLabel
 import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListener
 import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListenerTest
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
@@ -36,6 +39,8 @@ import io.challenge_workshop.mal_ui.auth.awaitLoopbackPortFree
 import io.challenge_workshop.mal_ui.auth.SIGNED_OUT_REASON_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_MORE_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_FILTERS_TAG
+import io.challenge_workshop.mal_ui.auth.ANIME_LIST_SORT_MENU_TAG
+import io.challenge_workshop.mal_ui.auth.ANIME_LIST_SORT_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_TAG
 import io.challenge_workshop.mal_ui.auth.FAKE_MAL_ANIME_TITLES
 import io.challenge_workshop.mal_ui.auth.SessionScreenTag
@@ -394,8 +399,9 @@ class SessionRouteTest {
     fun choosing_a_watch_status_refetches_that_slice_and_returns_to_the_top() {
         val requests = Collections.synchronizedList(mutableListOf<Url>())
         val filtered = pagedRepository(
-            animeListTitles = { status ->
-                if (status == "watching") (1..60).map { "Episode $it" } else (1..120).map { "Anime $it" }
+            animeListTitles = { url ->
+                if (url.parameters["status"] == "watching") (1..60).map { "Episode $it" }
+                else (1..120).map { "Anime $it" }
             },
             onAnimeListRequest = { requests += it },
         )
@@ -463,8 +469,8 @@ class SessionRouteTest {
     fun the_previous_entries_stay_on_screen_with_the_filters_disabled_until_the_replacement_lands() {
         val releaseFilteredPage = CompletableDeferred<Unit>()
         val holding = pagedRepository(
-            animeListTitles = { status ->
-                if (status == null) (1..120).map { "Anime $it" } else listOf("Episode 1")
+            animeListTitles = { url ->
+                if (url.parameters["status"] == null) (1..120).map { "Anime $it" } else listOf("Episode 1")
             },
             holdAnimeList = { request ->
                 if (request.url.parameters["status"] != null) releaseFilteredPage.await()
@@ -500,6 +506,95 @@ class SessionRouteTest {
             }
         } finally {
             holding.close()
+        }
+    }
+
+    /**
+     * Ticket 05, end to end: the menu entry reaches MAL's `sort` parameter, the re-ordered answer
+     * replaces the list, and the list comes back to the top.
+     *
+     * The re-ordered slice is given different titles for the same reason the filter test does — a
+     * fake that served the same entries under every `sort` could not tell "the menu reached MAL"
+     * from "the entry did nothing". Ordering is MAL's job: the list is paged, so nothing here
+     * re-orders what is loaded, and that is also why there is no reverse toggle to click. See
+     * ADR-0003.
+     */
+    @Test
+    fun choosing_a_sort_order_refetches_in_that_order_and_returns_to_the_top() {
+        val requests = Collections.synchronizedList(mutableListOf<Url>())
+        val sorted = pagedRepository(
+            animeListTitles = { url ->
+                if (url.parameters["sort"] == "anime_title") (1..60).map { "Alphabetical $it" }
+                else (1..120).map { "Anime $it" }
+            },
+            onAnimeListRequest = { requests += it },
+        )
+        val sortedList = AnimeListViewModel(sorted)
+        try {
+            runComposeUiTest {
+                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, sortedList) }
+
+                waitUntil("the first page lands", WAIT_MS) { sortedList.state.value.entries.size == 50 }
+                // The launch default, and it says which way it sorts rather than just naming a field.
+                onNodeWithTag(ANIME_LIST_SORT_TAG).assertTextContains("Last updated (newest first)", substring = true)
+
+                scrollToLastLoadedEntry(sortedList)
+                waitUntil("a second page lands", WAIT_MS) { sortedList.state.value.entries.size == 100 }
+
+                // A hundred entries down, and still on screen: the control is a sibling of the list
+                // rather than an item in it, precisely so it does not scroll out of reach.
+                onNodeWithTag(ANIME_LIST_SORT_TAG).assertIsDisplayed().performClick()
+                onNodeWithText("Title (A–Z)").performClick()
+
+                waitUntil("the re-ordered first page replaces it", WAIT_MS) {
+                    sortedList.state.value.entries.size == 50 &&
+                        sortedList.state.value.entries.first().title == "Alphabetical 1"
+                }
+                waitForIdle()
+
+                assertEquals(
+                    listOf("list_updated_at" to "0", "list_updated_at" to "50", "anime_title" to "0"),
+                    requests.map { it.parameters["sort"] to it.parameters["offset"] },
+                    "the menu sends exactly one `sort` value and the re-ordered list is fetched " +
+                        "from its own start — `offset` counts positions in whichever order the " +
+                        "query names, so carrying the old one would skip the first fifty of it",
+                )
+                // Scrolled back to the top of a list far longer than the window, so this is only on
+                // screen if the swap took the old scroll position with it.
+                onNodeWithText("Alphabetical 1").assertIsDisplayed()
+                onNodeWithText("Anime 1").assertDoesNotExist()
+                onNodeWithTag(ANIME_LIST_SORT_TAG).assertTextContains("Title (A–Z)", substring = true)
+            }
+        } finally {
+            sorted.close()
+        }
+    }
+
+    /**
+     * There are exactly four orderings and no way to reverse any of them, which is a design decision
+     * (ADR-0003) rather than an omission — the list is paged, so a reverse toggle could only reverse
+     * the pages already loaded.
+     *
+     * Asserted on the open menu because that is the only place a fifth entry could appear, and a
+     * "Reverse" or "Descending" item is exactly the well-meant addition this is here to stop.
+     */
+    @Test
+    fun the_sort_menu_offers_mals_four_orderings_and_no_direction_toggle() {
+        runComposeUiTest {
+            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
+            waitUntil("the first page lands", WAIT_MS) { animeList.state.value.loaded }
+
+            onNodeWithTag(ANIME_LIST_SORT_TAG).performClick()
+            waitForIdle()
+
+            for (label in ANIME_LIST_SORT_ORDERS.map { it.sortLabel() }) {
+                onNodeWithText(label).assertIsDisplayed()
+            }
+            assertEquals(
+                4,
+                onNodeWithTag(ANIME_LIST_SORT_MENU_TAG).onChildren().fetchSemanticsNodes().size,
+                "a fifth menu entry is either a Sort Order MAL does not have or a reverse toggle",
+            )
         }
     }
 
@@ -572,7 +667,7 @@ class SessionRouteTest {
      * holds one short page: every other test on this screen wants that, and this one cannot use it.
      */
     private fun pagedRepository(
-        animeListTitles: (String?) -> List<String> = { (1..120).map { "Anime $it" } },
+        animeListTitles: (Url) -> List<String> = { (1..120).map { "Anime $it" } },
         failAnimeListAt: (Int) -> Boolean = { false },
         holdAnimeList: suspend (HttpRequestData) -> Unit = {},
         onAnimeListRequest: (Url) -> Unit = {},

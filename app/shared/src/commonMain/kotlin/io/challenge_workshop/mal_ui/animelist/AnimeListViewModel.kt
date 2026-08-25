@@ -63,4 +63,26 @@ class AnimeListViewModel(repository: MalSessionRepository) : ViewModel() {
         if (current.watchStatus == watchStatus && current.firstPageError == null) return
         viewModelScope.launch { pager.reset(watchStatus = watchStatus) }
     }
+
+    /**
+     * Re-orders the Anime List by one of the four orderings MAL supports.
+     *
+     * Ordering is MAL's job for the same reason filtering is — the list is paged, so it is never
+     * wholly in memory — so this goes through the *same* [AnimeListPager.reset] as the filter, with
+     * the same discard, the same old-entries-until-the-swap and the same scroll to the top. There is
+     * deliberately no second version of that behaviour, and no reverse toggle to need one: see
+     * ADR-0003.
+     *
+     * Re-picking the current ordering is dropped rather than refetched, on the same terms as the
+     * filter — unless its own first page failed, in which case picking it again is the gesture a
+     * person reaches for and there is nothing on screen for it to disturb.
+     *
+     * Held in memory only. A Sort Order that outlived the launch would be a preference nobody set,
+     * and the default is the one the app should open on. The Layout is the choice that persists.
+     */
+    fun setSortOrder(sortOrder: AnimeListSortOrder) {
+        val current = state.value
+        if (current.sortOrder == sortOrder && current.firstPageError == null) return
+        viewModelScope.launch { pager.reset(sortOrder = sortOrder) }
+    }
 }

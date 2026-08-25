@@ -38,6 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.challenge_workshop.mal_ui.animelist.AnimeListFilters
+import io.challenge_workshop.mal_ui.animelist.AnimeListSortMenu
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.animelist.LoadMoreWhenNearEnd
 import io.challenge_workshop.mal_ui.animelist.animeListItems
@@ -261,16 +262,29 @@ fun SignedInScreen(
         modifier = modifier.fillMaxSize().safeContentPadding(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Outside the lazy list, so it stays put while the list scrolls under it. Ticket 09 puts
-        // the top app bar above it; until then it is simply the top of the screen.
-        AnimeListFilters(
-            selected = list.watchStatus,
-            enabled = !list.loadingFirstPage,
-            onSelect = animeList::setWatchStatus,
-            // The same column width the list's own items get, so the row lines up with the
-            // entries it filters rather than running the full width of a desktop window.
-            modifier = Modifier.paneItem().padding(horizontal = 16.dp, vertical = 8.dp),
-        )
+        // Outside the lazy list, so both controls stay put while the list scrolls under them.
+        // Ticket 09 puts the top app bar above them; until then they are simply the top of the
+        // screen. The same column width the list's own items get, so they line up with the entries
+        // they act on rather than running the full width of a desktop window.
+        // The padding goes *outside* the width cap, not inside it: `paneItem()` caps the content at
+        // 560dp, and padding applied after it would spend 32dp of that cap and leave these controls
+        // inset from the very entries they act on — the `LazyColumn` pads its entries with
+        // `contentPadding`, which is outside their cap.
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).paneItem()) {
+            AnimeListFilters(
+                selected = list.watchStatus,
+                // Both are disabled by the same flag, because both go through the same reset: the
+                // entries on screen are the previous query's until the replacement lands, so a live
+                // control would invite a second pick against a list that has not changed yet.
+                enabled = !list.loadingFirstPage,
+                onSelect = animeList::setWatchStatus,
+            )
+            AnimeListSortMenu(
+                selected = list.sortOrder,
+                enabled = !list.loadingFirstPage,
+                onSelect = animeList::setSortOrder,
+            )
+        }
         LazyColumn(
             // `weight`, not `fillMaxSize`: a child that fills the height inside a `Column` takes
             // the whole window and hangs the last entries of the list below the bottom of it,

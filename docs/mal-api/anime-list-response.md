@@ -32,6 +32,7 @@ the parsed result: a wrong `fields` string still returns **200**, and simply omi
 |---|---|---|
 | 1 | `status` takes **one** value or none — there is no multi-select | Six mutually exclusive filter chips, rather than a multi-select that would need N merged paged queries |
 | 2 | `sort` accepts `list_updated_at`, `list_score`, `anime_title`, `anime_start_date`, **each with a fixed direction and no direction parameter** | Four Sort Orders labelled with their real direction, and no reverse toggle (ADR-0003) |
+| 2a | Those directions are **Descending** for `list_updated_at`, `list_score` and `anime_start_date`, and **Ascending** for `anime_title` only | The labels are the only place a direction is written down, so a wrong one is a label that lies — "Start date (oldest first)" opening on this season reads as broken ordering. `AnimeListSortOrdersTest` pins all four strings |
 | 3 | `paging.next` is an **absolute URL** to `api.myanimelist.net` | Web must never follow it — it has to stay on the Relay's origin — so `offset` is driven from our side and only the link's *presence* is read |
 | 4 | An anime whose episode count is unannounced reports `num_episodes: 0`, not `null` | The UI shows `?` rather than `3 / 0` |
 
@@ -62,7 +63,9 @@ $ curl -s -H "Authorization: Bearer $MAL_ACCESS_TOKEN" \
 $ curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $MAL_ACCESS_TOKEN" \
     'https://api.myanimelist.net/v2/users/@me/animelist?limit=1&status=watching&status=completed'
 
-# 3. Claim 2: which `sort` values are accepted, and which 400.
+# 3. Claim 2 / 2a: which `sort` values are accepted, which 400, and which way each one runs.
+#    For 2a, fetch one page per sort and read the first two entries: `anime_start_date` is the one
+#    worth checking, because it is the only label ticket 05 had to correct against the spec's copy.
 $ for s in list_updated_at list_score anime_title anime_start_date anime_id list_score_desc; do \
     printf '%s ' "$s"; \
     curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $MAL_ACCESS_TOKEN" \

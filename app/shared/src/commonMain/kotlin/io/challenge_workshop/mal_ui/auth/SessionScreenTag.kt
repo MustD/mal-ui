@@ -58,3 +58,20 @@ val ANIME_LIST_MORE_TAG: String = "$ANIME_LIST_TAG.more"
  * fifty entries at a time is one the user cannot get back to.
  */
 val ANIME_LIST_FILTERS_TAG: String = "${SessionScreenTag.SignedIn.tag}.filters"
+
+/**
+ * The Sort Order control above the Anime List — the button that names the current ordering.
+ *
+ * A sibling of the list for the same reason the filter row is: it is a control over the list, and
+ * one that scrolls away from it fifty entries at a time is one the user cannot get back to.
+ */
+val ANIME_LIST_SORT_TAG: String = "${SessionScreenTag.SignedIn.tag}.sort"
+
+/**
+ * The Sort Order menu itself, once opened.
+ *
+ * Its own tag because the thing worth asserting about it is *how many* entries it has: MAL offers
+ * four orderings and no way to reverse any of them, and a fifth entry — a "Reverse" toggle most of
+ * all — is a well-meant addition that could only reverse the pages already loaded. See ADR-0003.
+ */
+val ANIME_LIST_SORT_MENU_TAG: String = "$ANIME_LIST_SORT_TAG.menu"

@@ -474,4 +474,64 @@ class AnimeListPagerTest {
         assertNotNull(state.firstPageError)
         assertTrue(!state.loaded, "nothing landed, so this must not read as an empty filtered list")
     }
+
+    /**
+     * A Sort Order change is a filter change in every respect that matters here: the ordering is
+     * MAL's, so the pages already loaded are of an order the user has stopped asking for, and
+     * `offset` counts positions in whichever order the query names.
+     *
+     * The failure this pins is the quiet one — carrying the old `offset` into the new order, which
+     * skips the first N entries of it and looks like a list that simply starts in the wrong place.
+     */
+    @Test
+    fun a_sort_order_change_resets_paging_and_carries_the_new_sort_on_every_page() = runTest {
+        var sorted = false
+        val (pager, mal) = pagerOver(
+            pageSize = 2,
+            animeList = { offset ->
+                val firstId = if (sorted) 100L + offset else 1L + offset
+                AnimeListResponse.Page(fakeEntries(2, firstId = firstId), hasMore = true)
+            },
+        )
+        pager.loadFirstPage()
+        pager.next()
+
+        sorted = true
+        pager.reset(sortOrder = AnimeListSortOrder.Title)
+        pager.next()
+
+        assertContentEquals(
+            listOf(100L, 101L, 102L, 103L),
+            pager.state.value.entries.map { it.animeId },
+            "the re-ordered list must page from its own start, with nothing of the old order left",
+        )
+        assertEquals(
+            listOf("0", "2", "0", "2"),
+            mal.animeListRequests.map { it.parameters["offset"] },
+            "`offset` went back to 0 with the Sort Order, then advanced through the new ordering",
+        )
+        assertEquals(
+            listOf("list_updated_at", "list_updated_at", "anime_title", "anime_title"),
+            mal.animeListRequests.map { it.parameters["sort"] },
+            "every request after the change carries the new Sort Order, not just the first",
+        )
+        assertEquals(AnimeListSortOrder.Title, pager.state.value.sortOrder)
+    }
+
+    /**
+     * The two controls are independent settings of one query, and a `reset` that defaulted either
+     * of them back would silently drop the other's choice — a Sort Order change that also cleared
+     * the filter reads as the chip having been un-tapped by itself.
+     */
+    @Test
+    fun a_sort_order_change_keeps_the_watch_status_filter() = runTest {
+        val (pager, mal) = pagerOver(page(), watchStatus = WatchStatus.Watching)
+
+        pager.loadFirstPage()
+        pager.reset(sortOrder = AnimeListSortOrder.Score)
+
+        assertEquals(WatchStatus.Watching, pager.state.value.watchStatus)
+        assertEquals("watching", mal.animeListRequests.last().parameters["status"])
+        assertEquals("list_score", mal.animeListRequests.last().parameters["sort"])
+    }
 }

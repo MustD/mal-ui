@@ -9,6 +9,7 @@ import io.ktor.client.engine.mock.respondError
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.Url
 import io.ktor.http.headersOf
 
 /**
@@ -57,12 +58,12 @@ private fun animeListJson(titles: List<String>, offset: Int, limit: Int): String
 }
 
 /**
- * @param animeListTitles the whole Anime List this fake holds **for a given `status` parameter** —
- * null being All — paged off the request's own `offset` and `limit` rather than off a size fixed
- * here, so a test about paging is testing the offsets the app actually drives. Keyed on the status
- * because that is how a filter test tells the slices apart: identical titles under two filters
- * cannot show that the filter reached MAL at all. The default is short enough to fit one page,
- * which is what every test that is not about filtering or paging wants.
+ * @param animeListTitles the whole Anime List this fake holds **for a given query** — paged off the
+ * request's own `offset` and `limit` rather than off a size fixed here, so a test about paging is
+ * testing the offsets the app actually drives. Handed the request's [Url] because that is how a
+ * filter or Sort Order test tells one answer from another: identical titles under two `status` or
+ * two `sort` values cannot show that the control reached MAL at all. The default is short enough to
+ * fit one page, which is what every test that is not about filtering, ordering or paging wants.
  * @param failAnimeListAt asked for each Anime List request's `offset`. Answering true makes MAL
  * fail that page — which is a different screen from a failed first page, and the only way to reach
  * the retry at the bottom of the list. Consulted per request rather than fixed, so a test can let
@@ -75,7 +76,7 @@ private fun animeListJson(titles: List<String>, offset: Int, limit: Int): String
  * reachable as a trailing lambda.
  */
 internal fun fakeMal(
-    animeListTitles: (String?) -> List<String> = { FAKE_MAL_ANIME_TITLES },
+    animeListTitles: (Url) -> List<String> = { FAKE_MAL_ANIME_TITLES },
     failAnimeListAt: (Int) -> Boolean = { false },
     holdAnimeList: suspend (HttpRequestData) -> Unit = {},
     onRequest: (HttpRequestData) -> Unit = {},
@@ -94,7 +95,7 @@ internal fun fakeMal(
             request.url.encodedPath.endsWith("/users/@me/animelist") -> {
                 holdAnimeList(request)
                 val offset = request.url.parameters["offset"]?.toInt() ?: 0
-                val titles = animeListTitles(request.url.parameters["status"])
+                val titles = animeListTitles(request.url)
                 if (failAnimeListAt(offset)) {
                     respondError(HttpStatusCode.ServiceUnavailable, "boom")
                 } else {

@@ -58,13 +58,14 @@ enum class AiringStatus(val wireValue: String?) {
  * The orderings MAL offers, each with a **fixed direction and no direction parameter**.
  *
  * There is deliberately no reverse toggle: the Anime List is paged, so reversing what happens to be
- * loaded is a bug that looks like a feature.
+ * loaded is a bug that looks like a feature. See `docs/adr/0003-mal-owns-filtering-and-ordering.md`.
  *
  * `anime_id` is a fifth value MAL's documentation marks "under development", and is not offered.
  *
  * Wire values only. The user-facing labels have to name the direction each one sorts in — "Score"
  * alone reads as ascending to about half of everyone — but that is display copy, and `:core` is the
- * tier `:server` also depends on. Ticket 05 puts them in `:app:shared` with the control.
+ * tier `:server` also depends on, so they live beside the control in `:app:shared`
+ * (`AnimeListSortOrder.sortLabel`).
  */
 enum class AnimeListSortOrder(val wireValue: String) {
     LastUpdated("list_updated_at"),
