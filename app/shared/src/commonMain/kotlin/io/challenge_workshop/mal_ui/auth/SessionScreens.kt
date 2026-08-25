@@ -338,7 +338,14 @@ fun SignedInScreen(
                 }
             }
 
-            animeListItems(state = list, onRetry = animeList::retry, itemModifier = Modifier.paneItem())
+            animeListItems(
+                state = list,
+                onRetry = animeList::retry,
+                // "Show all" is the same gesture as tapping the All chip, and goes through the same
+                // reset — an empty slice's way out must not become a second way of changing filter.
+                onShowAll = { animeList.setWatchStatus(null) },
+                itemModifier = Modifier.paneItem(),
+            )
         }
     }
 }

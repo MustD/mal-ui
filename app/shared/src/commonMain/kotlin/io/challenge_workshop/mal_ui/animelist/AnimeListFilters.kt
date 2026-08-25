@@ -52,6 +52,30 @@ fun WatchStatus?.filterLabel(): String = when (this) {
 }
 
 /**
+ * What a filter that matched nothing says.
+ *
+ * **Deliberately not the same sentence as the empty-account one, and deliberately not built from
+ * [filterLabel].** The fix is different — an empty account is something to go and do on
+ * myanimelist.net, an empty slice is a filter to undo — and a message that read "Nothing matches
+ * Completed" would be about the control rather than about the list. Naming the filter in the words
+ * a person would use is the whole of what makes it actionable.
+ *
+ * Never reached for `null`: All matching nothing *is* the empty account, and there is no filter to
+ * name or to undo. That is why this takes a non-null [WatchStatus] rather than the nullable one the
+ * row is built from.
+ */
+fun WatchStatus.emptyListMessage(): String = when (this) {
+    WatchStatus.Watching -> "Nothing you are watching right now."
+    WatchStatus.Completed -> "Nothing completed."
+    WatchStatus.OnHold -> "Nothing on hold."
+    WatchStatus.Dropped -> "Nothing dropped."
+    WatchStatus.PlanToWatch -> "Nothing you plan to watch."
+    // Unreachable through [ANIME_LIST_FILTERS] — it has no wire value, so it cannot be a query —
+    // and named rather than defaulted for the same reason [filterLabel] names it.
+    WatchStatus.Unknown -> "Nothing under this filter."
+}
+
+/**
  * The filter row: one Watch Status at a time, All to begin with.
  *
  * **A horizontally scrollable [Row] rather than a tab row**, because six tabs do not fit the width

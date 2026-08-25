@@ -152,38 +152,83 @@ class AnimeListPager(
     }
 
     /**
-     * One request, and the only place [nextOffset] moves.
+     * One request — or a run of them across a hole in the list — and the only place [nextOffset]
+     * moves.
      *
-     * Which of the two loading/error pairs it drives is decided by the offset it is about to ask
-     * for, not by whether the list is empty: an `offset=0` request is a first page even when a
-     * previous filter left entries on screen behind it.
+     * Which of the two loading/error pairs it drives is decided once, before the first request, and
+     * by what is on screen behind it rather than by the offset alone. An `offset=0` request is a
+     * first page even when a previous filter left entries behind it, and an `offset=50` request is
+     * *also* a first page when the pages before it came back empty: in both cases there is nothing
+     * loaded to keep, so the screen owes the user a first-page skeleton or a full-screen error, not
+     * a spinner at the bottom of a list with no rows in it.
+     *
+     * **An empty page that is not the end is followed immediately by the next one.** MAL sends
+     * `data: []` alongside a `paging.next`, and [AnimeListResponse.hasMore] and the entry count are
+     * independent facts — so such a page appends nothing, and nothing downstream can then ask for
+     * the one after it: the screen's proximity trigger re-arms on the entry count changing, which
+     * it did not, and a screen with no rows cannot be scrolled towards its end either. The pager is
+     * the only thing left that can move, so it does, up to [MAX_EMPTY_PAGE_SCAN] pages.
      */
     private suspend fun load() {
-        val first = nextOffset == 0
+        val first = nextOffset == 0 || _state.value.entries.isEmpty()
         if (!begin(first)) return
+        // Where a give-up rewinds to. A scan advances [nextOffset] across every hole it pages past,
+        // so without this the retry offered when it runs out would resume *after* the run — a
+        // thousand positions into a list whose entries all sit before that, which MAL answers with
+        // an empty page and no `paging.next`. That reads as an empty account, which is the one
+        // thing this screen must never say to a user who has a list.
+        val runStartOffset = nextOffset
         val mine = generation
-        val query = _state.value
+        var emptyPages = 0
         try {
-            val page = client.page(
-                offset = nextOffset,
-                limit = pageSize,
-                watchStatus = query.watchStatus,
-                sortOrder = query.sortOrder,
-            )
-            // A reset landed while this was in flight, so this page is of a list the user has
-            // stopped looking at. Nothing to clear either: the reset released the loading slot and
-            // its own load owns it now.
-            if (mine != generation) return
-            nextOffset += pageSize
-            _state.update {
-                it.copy(
-                    entries = if (first) page.entries else it.entries + page.entries,
-                    loaded = true,
-                    exhausted = !page.hasMore,
-                    loadingFirstPage = false,
-                    loadingMore = false,
-                    revision = if (first) it.revision + 1 else it.revision,
+            while (true) {
+                val query = _state.value
+                val page = client.page(
+                    offset = nextOffset,
+                    limit = pageSize,
+                    watchStatus = query.watchStatus,
+                    sortOrder = query.sortOrder,
                 )
+                // A reset landed while this was in flight, so this page is of a list the user has
+                // stopped looking at. Nothing to clear either: the reset released the loading slot
+                // and its own load owns it now.
+                if (mine != generation) return
+                nextOffset += pageSize
+                val emptyHole = page.entries.isEmpty() && page.hasMore
+                // The in-flight slot is *kept* across the hole rather than released and re-claimed,
+                // so a proximity-driven `next()` cannot slip into the gap and request the offset
+                // this run is about to ask for itself.
+                val scanning = emptyHole && ++emptyPages < MAX_EMPTY_PAGE_SCAN
+                _state.update {
+                    it.copy(
+                        // A hole changes nothing on screen. On a [reset] the entries behind this run
+                        // are the *previous* query's and are deliberately still observable until the
+                        // replacement lands, so swapping in a hole's empty page would flash the
+                        // screen to a skeleton mid-reset — exactly what keeping them is for.
+                        entries = when {
+                            !first -> it.entries + page.entries
+                            scanning -> it.entries
+                            else -> page.entries
+                        },
+                        loaded = true,
+                        exhausted = !page.hasMore,
+                        loadingFirstPage = if (scanning) it.loadingFirstPage else false,
+                        loadingMore = if (scanning) it.loadingMore else false,
+                        // Only for the page that ends the run: a replacement the user can see is
+                        // what the screen scrolls to the top for, and a hole is not one.
+                        revision = if (first && !scanning) it.revision + 1 else it.revision,
+                    )
+                }
+                if (scanning) continue
+                // Out of scan, still nothing: MAL has said there is more of this list
+                // [MAX_EMPTY_PAGE_SCAN] times and sent none of it. Stopping quietly would leave the
+                // screen on a skeleton that never resolves, so it stops as what it is — something
+                // that failed, with a retry.
+                if (emptyHole) {
+                    nextOffset = runStartOffset
+                    fail(first, EMPTY_SCAN_MESSAGE)
+                }
+                return
             }
         } catch (e: CancellationException) {
             // The screen went away. Not a failure to report — and clearing the loading flag is
@@ -253,4 +298,21 @@ class AnimeListPager(
             }
         }
     }
+
+    companion object {
+        /**
+         * How many consecutive empty-but-not-exhausted pages are paged past before the pager gives
+         * up on the list.
+         *
+         * A floor under a loop that is otherwise bounded only by MAL's honesty. Twenty pages is
+         * a thousand positions scanned, which is far more than any hole a reordering list could
+         * open under us and far less than a request loop nobody can see.
+         */
+        const val MAX_EMPTY_PAGE_SCAN: Int = 20
+    }
 }
+
+/** Shown when [AnimeListPager.MAX_EMPTY_PAGE_SCAN] pages of nothing ran out. */
+private const val EMPTY_SCAN_MESSAGE: String =
+    "MyAnimeList kept reporting more of your list and then sending none of it."
+

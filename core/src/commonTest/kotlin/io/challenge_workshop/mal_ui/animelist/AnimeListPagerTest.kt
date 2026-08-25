@@ -259,6 +259,147 @@ class AnimeListPagerTest {
         )
     }
 
+    /**
+     * `data: []` with a `paging.next` — two independent facts in MAL's shape, and a page that
+     * appends nothing.
+     *
+     * Nothing downstream can get past one. The scroll trigger re-arms on the entry count changing
+     * and the count does not change; with an empty screen there is nothing to scroll either. So the
+     * pager asks again itself, and the screen stays on the first-page state throughout rather than
+     * flipping to an empty list MAL has just contradicted.
+     */
+    @Test
+    fun an_empty_page_that_is_not_the_end_is_paged_past_rather_than_shown() = runTest {
+        lateinit var pager: AnimeListPager
+        val flagsWhileScanning = mutableListOf<Pair<Boolean, Boolean>>()
+        val (built, mal) = pagerOver(
+            pageSize = 2,
+            animeList = { offset ->
+                if (offset < 4) AnimeListResponse.Page(emptyList(), hasMore = true)
+                else AnimeListResponse.Page(fakeEntries(2), hasMore = false)
+            },
+            // Sampled from inside the second and third requests: the scan is the one window in
+            // which the pager asks for a page nobody scrolled towards, and it must be showing the
+            // first-page state while it does — not the "loading more" row at the bottom of a list
+            // that has no entries in it.
+            holdAnimeList = { offset ->
+                if (offset > 0) {
+                    flagsWhileScanning += pager.state.value.let { it.loadingFirstPage to it.loadingMore }
+                }
+            },
+        )
+        pager = built
+
+        pager.loadFirstPage()
+
+        assertEquals(listOf("0", "2", "4"), mal.animeListRequests.map { it.parameters["offset"] })
+        assertContentEquals(listOf(1L, 2L), pager.state.value.entries.map { it.animeId })
+        assertEquals(listOf(true to false, true to false), flagsWhileScanning)
+        val state = pager.state.value
+        assertTrue(state.exhausted)
+        assertTrue(!state.loadingFirstPage)
+        assertNull(state.firstPageError)
+    }
+
+    /**
+     * The scan is a loop over a MAL that keeps saying there is more and sending none of it, so it
+     * needs a floor. Stopping is not enough on its own — stopping quietly would leave the screen on
+     * a skeleton that never resolves — so it stops as the retryable failure it is.
+     */
+    @Test
+    fun a_run_of_empty_pages_stops_asking_and_surfaces_a_retryable_error() = runTest {
+        var holes = true
+        val (pager, mal) = pagerOver(
+            pageSize = 2,
+            animeList = { offset ->
+                if (holes) AnimeListResponse.Page(emptyList(), hasMore = true)
+                else AnimeListResponse.Page(fakeEntries(2, firstId = offset + 1L), hasMore = false)
+            },
+        )
+
+        pager.loadFirstPage()
+
+        assertEquals(AnimeListPager.MAX_EMPTY_PAGE_SCAN, mal.animeListRequests.size)
+        val gaveUp = pager.state.value
+        assertNotNull(gaveUp.firstPageError)
+        assertTrue(!gaveUp.loadingFirstPage)
+        assertTrue(!gaveUp.loaded, "nothing ever landed, so this must not read as an empty Anime List")
+
+        // The retry has to go back to where the run *started*, not to where it gave up. Resuming at
+        // the far end of a scan asks MAL for a position past the end of a list whose entries all sit
+        // before it — which comes back empty and exhausted, and would then be shown as an empty
+        // account to a user who has one.
+        holes = false
+        pager.retry()
+
+        assertEquals(
+            "0",
+            mal.animeListRequests.last().parameters["offset"],
+            "the scan advanced past twenty holes, and the retry must not resume beyond them",
+        )
+        assertContentEquals(listOf(1L, 2L), pager.state.value.entries.map { it.animeId })
+        assertNull(pager.state.value.firstPageError)
+    }
+
+    /**
+     * A hole met during a [AnimeListPager.reset] must not empty the screen either.
+     *
+     * The entries behind a reset are the previous query's and are deliberately kept until the
+     * replacement lands — a filter that flashed the screen to a skeleton on every tap is what that
+     * is for — and a page with nothing in it is not a replacement.
+     */
+    @Test
+    fun a_hole_during_a_reset_does_not_empty_the_screen_before_the_replacement_lands() = runTest {
+        lateinit var pager: AnimeListPager
+        var filtering = false
+        val entriesWhileScanning = mutableListOf<List<Long>>()
+        val (built, _) = pagerOver(
+            pageSize = 2,
+            animeList = { offset ->
+                when {
+                    !filtering -> AnimeListResponse.Page(fakeEntries(2), hasMore = false)
+                    offset == 0 -> AnimeListResponse.Page(emptyList(), hasMore = true)
+                    else -> AnimeListResponse.Page(fakeEntries(2, firstId = 9), hasMore = false)
+                }
+            },
+            // Sampled from inside the request that follows the hole: this is the window in which the
+            // old slice has to still be there.
+            holdAnimeList = { offset ->
+                if (filtering && offset > 0) entriesWhileScanning += pager.state.value.entries.map { it.animeId }
+            },
+        )
+        pager = built
+        pager.loadFirstPage()
+
+        filtering = true
+        pager.reset(watchStatus = WatchStatus.OnHold)
+
+        assertEquals(listOf(listOf(1L, 2L)), entriesWhileScanning)
+        assertContentEquals(listOf(9L, 10L), pager.state.value.entries.map { it.animeId })
+    }
+
+    /** The same hole, met halfway down a loaded list: paged past, and nothing on screen disturbed. */
+    @Test
+    fun an_empty_page_in_the_middle_keeps_what_is_loaded_and_pages_past_it() = runTest {
+        val (pager, mal) = pagerOver(
+            pageSize = 2,
+            animeList = { offset ->
+                when (offset) {
+                    0 -> AnimeListResponse.Page(fakeEntries(2), hasMore = true)
+                    2 -> AnimeListResponse.Page(emptyList(), hasMore = true)
+                    else -> AnimeListResponse.Page(fakeEntries(2, firstId = 3), hasMore = false)
+                }
+            },
+        )
+
+        pager.loadFirstPage()
+        pager.next()
+
+        assertEquals(listOf("0", "2", "4"), mal.animeListRequests.map { it.parameters["offset"] })
+        assertContentEquals(listOf(1L, 2L, 3L, 4L), pager.state.value.entries.map { it.animeId })
+        assertNull(pager.state.value.moreError)
+    }
+
     @Test
     fun a_failed_first_page_surfaces_as_the_first_page_error_with_nothing_loaded() = runTest {
         val (pager, _) = pagerOver({ AnimeListResponse.Failure(HttpStatusCode.ServiceUnavailable) })

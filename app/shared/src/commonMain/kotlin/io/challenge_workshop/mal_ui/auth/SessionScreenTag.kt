@@ -51,6 +51,35 @@ val ANIME_LIST_TAG: String = "${SessionScreenTag.SignedIn.tag}.animeList"
 val ANIME_LIST_MORE_TAG: String = "$ANIME_LIST_TAG.more"
 
 /**
+ * The first-page placeholder: the Anime List's own shape, drawn with nothing in it.
+ *
+ * Its own tag because "is the skeleton on screen" is the one question that cannot be asked of the
+ * pager's state — `loadingFirstPage` says a request is in flight, not that the screen chose the
+ * skeleton over a spinner, and the difference between the two is the whole of the state.
+ */
+val ANIME_LIST_SKELETON_TAG: String = "$ANIME_LIST_TAG.skeleton"
+
+/**
+ * The message shown when the Anime List has nothing in it.
+ *
+ * One tag for both of the empty states rather than two, because what a test needs to assert is
+ * exactly the thing that separates them — the *words* — and a second tag would let the two branches
+ * be asserted without ever comparing their copy. Collapsing "your list is empty" into "this filter
+ * matched nothing" is the easiest mistake in this feature.
+ */
+val ANIME_LIST_EMPTY_TAG: String = "$ANIME_LIST_TAG.empty"
+
+/**
+ * The full-width error shown when the *first* page failed — nothing loaded, so the error is the
+ * screen.
+ *
+ * Distinct from [ANIME_LIST_MORE_TAG], which is the other failure: entries on screen, retry at the
+ * bottom, nothing discarded. Two tags because a test that could not tell them apart is the same test
+ * the pager keeps two error fields to make possible.
+ */
+val ANIME_LIST_ERROR_TAG: String = "$ANIME_LIST_TAG.error"
+
+/**
  * The Watch Status filter row above the Anime List.
  *
  * Sibling of the list rather than an item in it: the filter is a control over the list and has to

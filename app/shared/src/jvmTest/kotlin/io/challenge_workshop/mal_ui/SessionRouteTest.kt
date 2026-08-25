@@ -30,6 +30,7 @@ import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.text.AnnotatedString
 import io.challenge_workshop.mal_ui.animelist.ANIME_LIST_SORT_ORDERS
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
+import io.challenge_workshop.mal_ui.animelist.MY_ANIME_LIST_URL
 import io.challenge_workshop.mal_ui.animelist.sortLabel
 import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListener
 import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListenerTest
@@ -37,7 +38,10 @@ import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
 import io.challenge_workshop.mal_ui.auth.StartupRedirect
 import io.challenge_workshop.mal_ui.auth.awaitLoopbackPortFree
 import io.challenge_workshop.mal_ui.auth.SIGNED_OUT_REASON_TAG
+import io.challenge_workshop.mal_ui.auth.ANIME_LIST_EMPTY_TAG
+import io.challenge_workshop.mal_ui.auth.ANIME_LIST_ERROR_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_MORE_TAG
+import io.challenge_workshop.mal_ui.auth.ANIME_LIST_SKELETON_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_FILTERS_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_SORT_MENU_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_SORT_TAG
@@ -658,6 +662,150 @@ class SessionRouteTest {
                 "Force 401 must keep the refresh token — there is nothing to refresh with otherwise.",
             )
             onNodeWithText("deliberately invalidated", substring = true).assertIsDisplayed()
+        }
+    }
+
+    /**
+     * Ticket 06's first state. A centred spinner and a list are different shapes, so the page jumps
+     * when the data lands; a skeleton is the list, drawn empty.
+     */
+    @Test
+    fun the_first_page_shows_a_skeleton_in_the_shape_of_the_list() {
+        val releaseFirstPage = CompletableDeferred<Unit>()
+        val holding = pagedRepository(holdAnimeList = { releaseFirstPage.await() })
+        val holdingList = AnimeListViewModel(holding)
+        try {
+            runComposeUiTest {
+                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, holdingList) }
+                waitUntil("the first page is in flight", WAIT_MS) { holdingList.state.value.loadingFirstPage }
+                waitForIdle()
+
+                onNodeWithTag(ANIME_LIST_SKELETON_TAG).assertIsDisplayed()
+
+                releaseFirstPage.complete(Unit)
+                waitUntil("the first page lands", WAIT_MS) { holdingList.state.value.entries.size == 50 }
+                waitForIdle()
+
+                onNodeWithTag(ANIME_LIST_SKELETON_TAG).assertDoesNotExist()
+                onNodeWithText("Anime 1").assertIsDisplayed()
+            }
+        } finally {
+            holding.close()
+        }
+    }
+
+    /**
+     * Ticket 06's second state: an empty account is not a broken app, and the fix for it is not in
+     * this app at all — which is why it comes with a way out to myanimelist.net.
+     */
+    @Test
+    fun an_empty_anime_list_says_so_and_points_at_myanimelist() {
+        val opened = mutableListOf<String>()
+        val nothing = pagedRepository(animeListTitles = { emptyList() })
+        val nothingList = AnimeListViewModel(nothing)
+        try {
+            runComposeUiTest {
+                setContent {
+                    CompositionLocalProvider(LocalUriHandler provides RecordingUriHandler(opened)) {
+                        SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, nothingList)
+                    }
+                }
+                waitUntil("the empty first page lands", WAIT_MS) { nothingList.state.value.loaded }
+                waitForIdle()
+
+                onNodeWithTag(ANIME_LIST_EMPTY_TAG).assertIsDisplayed()
+                assertTrue(
+                    onNodeWithTag(ANIME_LIST_EMPTY_TAG).textContent().contains("nothing on your MyAnimeList"),
+                    "an empty account must be told it is empty, not left with a blank screen",
+                )
+
+                onNodeWithText("Open myanimelist.net").performClick()
+
+                assertEquals(listOf(MY_ANIME_LIST_URL), opened)
+            }
+        } finally {
+            nothing.close()
+        }
+    }
+
+    /**
+     * Ticket 06's third state, and the pair this spec is easiest to collapse by accident: an empty
+     * *slice* is a filter to undo, and saying "your list is empty" to a user with four hundred
+     * completed shows is a false statement about their account.
+     *
+     * So the message names the filter and the way out is one tap, rather than the user having to
+     * work out that the chip they tapped is what emptied the screen.
+     */
+    @Test
+    fun a_filter_that_matches_nothing_names_it_and_offers_a_way_back() {
+        val sliced = pagedRepository(
+            animeListTitles = { url ->
+                if (url.parameters["status"] == "on_hold") emptyList() else (1..120).map { "Anime $it" }
+            },
+        )
+        val slicedList = AnimeListViewModel(sliced)
+        try {
+            runComposeUiTest {
+                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, slicedList) }
+                waitUntil("the whole list lands", WAIT_MS) { slicedList.state.value.entries.size == 50 }
+
+                onNodeWithText("On hold").performClick()
+                waitUntil("the empty slice lands", WAIT_MS) {
+                    slicedList.state.value.let { it.loaded && it.entries.isEmpty() }
+                }
+                waitForIdle()
+
+                assertEquals(
+                    "Nothing on hold.",
+                    onNodeWithTag(ANIME_LIST_EMPTY_TAG).textContent(),
+                    "the message must name the filter rather than report an empty account",
+                )
+
+                onNodeWithText("Show all").performClick()
+
+                waitUntil("the whole list comes back", WAIT_MS) { slicedList.state.value.entries.size == 50 }
+                waitForIdle()
+                onNodeWithText("Anime 1").assertIsDisplayed()
+                onNodeWithText("All").assertIsSelected()
+                onNodeWithTag(ANIME_LIST_EMPTY_TAG).assertDoesNotExist()
+            }
+        } finally {
+            sliced.close()
+        }
+    }
+
+    /**
+     * Ticket 06's fifth state. Nothing loaded, so there is nothing to keep on screen and the error
+     * is the screen — which is the half of the pair that must *not* look like a failed later page.
+     */
+    @Test
+    fun a_failed_first_page_is_an_error_with_a_retry_that_works() {
+        var failing = true
+        val flaky = pagedRepository(failAnimeListAt = { offset -> offset == 0 && failing })
+        val flakyList = AnimeListViewModel(flaky)
+        try {
+            runComposeUiTest {
+                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, flakyList) }
+                waitUntil("the first page fails", WAIT_MS) { flakyList.state.value.firstPageError != null }
+                waitForIdle()
+
+                onNodeWithTag(ANIME_LIST_ERROR_TAG).assertIsDisplayed()
+                onNodeWithTag(ANIME_LIST_SKELETON_TAG).assertDoesNotExist()
+                onNodeWithTag(ANIME_LIST_MORE_TAG).assertDoesNotExist()
+                onNodeWithTag(ANIME_LIST_EMPTY_TAG).assertDoesNotExist()
+
+                failing = false
+                onNodeWithText("Retry").performClick()
+
+                waitUntil("the retry lands the page that failed", WAIT_MS) {
+                    flakyList.state.value.entries.size == 50
+                }
+                waitForIdle()
+                onNodeWithTag(ANIME_LIST_ERROR_TAG).assertDoesNotExist()
+                onNodeWithText("Anime 1").assertIsDisplayed()
+            }
+        } finally {
+            flaky.close()
         }
     }
 
