@@ -14,6 +14,10 @@ import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onChildren
 import androidx.compose.ui.test.onNodeWithTag
@@ -31,6 +35,7 @@ import io.challenge_workshop.mal_ui.auth.StartupRedirect
 import io.challenge_workshop.mal_ui.auth.awaitLoopbackPortFree
 import io.challenge_workshop.mal_ui.auth.SIGNED_OUT_REASON_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_MORE_TAG
+import io.challenge_workshop.mal_ui.auth.ANIME_LIST_FILTERS_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_TAG
 import io.challenge_workshop.mal_ui.auth.FAKE_MAL_ANIME_TITLES
 import io.challenge_workshop.mal_ui.auth.SessionScreenTag
@@ -46,6 +51,9 @@ import io.challenge_workshop.mal_ui.session.MalSessionRepository
 import io.challenge_workshop.mal_ui.session.PendingAuthorization
 import io.challenge_workshop.mal_ui.session.SessionState
 import io.challenge_workshop.mal_ui.session.SignedOutReason
+import io.ktor.client.request.HttpRequestData
+import io.ktor.http.Url
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -285,7 +293,7 @@ class SessionRouteTest {
     @Test
     fun scrolling_to_the_end_loads_the_next_page_until_the_list_is_exhausted() {
         val offsets = Collections.synchronizedList(mutableListOf<String>())
-        val paged = pagedRepository(onAnimeListOffset = { offsets += it })
+        val paged = pagedRepository(onAnimeListRequest = { offsets += it.parameters["offset"].orEmpty() })
         val pagedList = AnimeListViewModel(paged)
         try {
             runComposeUiTest {
@@ -373,6 +381,129 @@ class SessionRouteTest {
     }
 
     /**
+     * Ticket 04, end to end: the chip reaches MAL's `status` parameter, the answer replaces the
+     * list, and the list comes back to the top.
+     *
+     * The two slices are given different titles deliberately — a fake that served the same entries
+     * under every filter could not tell "the filter reached MAL" from "the chip did nothing". The
+     * scroll matters for the same reason: the assertion that `Episode 1` is *displayed* is only
+     * meaningful because the screen was 100 entries down a different list when the chip was tapped,
+     * and the replacement is far too long to fit on screen.
+     */
+    @Test
+    fun choosing_a_watch_status_refetches_that_slice_and_returns_to_the_top() {
+        val requests = Collections.synchronizedList(mutableListOf<Url>())
+        val filtered = pagedRepository(
+            animeListTitles = { status ->
+                if (status == "watching") (1..60).map { "Episode $it" } else (1..120).map { "Anime $it" }
+            },
+            onAnimeListRequest = { requests += it },
+        )
+        val filteredList = AnimeListViewModel(filtered)
+        try {
+            runComposeUiTest {
+                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, filteredList) }
+
+                waitUntil("the unfiltered first page lands", WAIT_MS) {
+                    filteredList.state.value.entries.size == 50
+                }
+                // Exactly one chip is active, and on launch it is All — the whole list rather than
+                // an arbitrary slice of it.
+                onNodeWithText("All").assertIsSelected()
+                for (other in listOf("Watching", "Completed", "On hold", "Dropped", "Plan to watch")) {
+                    onNodeWithText(other).assertIsNotSelected()
+                }
+
+                scrollToLastLoadedEntry(filteredList)
+                waitUntil("a second page of the whole list lands", WAIT_MS) {
+                    filteredList.state.value.entries.size == 100
+                }
+
+                // A hundred entries down, and still on screen: the row is a sibling of the list
+                // rather than an item in it, precisely so it does not scroll out of reach.
+                onNodeWithTag(ANIME_LIST_FILTERS_TAG).assertIsDisplayed()
+
+                onNodeWithText("Watching").performClick()
+
+                waitUntil("the filtered first page replaces it", WAIT_MS) {
+                    filteredList.state.value.entries.size == 50 &&
+                        filteredList.state.value.entries.first().title == "Episode 1"
+                }
+                waitForIdle()
+
+                assertEquals(
+                    listOf(null to "0", null to "50", "watching" to "0"),
+                    requests.map { it.parameters["status"] to it.parameters["offset"] },
+                    "All sends no `status` at all, the chip sends exactly one value, and the new " +
+                        "list is fetched from its own start — with nothing prefetched off the " +
+                        "scroll position the old list was left at",
+                )
+                // Scrolled back to the top of a list far longer than the window, so this is only
+                // on screen if the swap took the old scroll position with it.
+                onNodeWithText("Episode 1").assertIsDisplayed()
+                onNodeWithText("Anime 1").assertDoesNotExist()
+                // Still exactly one, and now the one that was tapped.
+                onNodeWithText("Watching").assertIsSelected()
+                onNodeWithText("All").assertIsNotSelected()
+            }
+        } finally {
+            filtered.close()
+        }
+    }
+
+    /**
+     * The window between the tap and the replacement, which is the whole reason the pager keeps the
+     * old entries: a grid that empties to a spinner on every tap reads as broken.
+     *
+     * The filter row has to be disabled through it as well — the entries on screen are the *old*
+     * filter's, so a row that still looked live would be inviting a second tap against a list that
+     * has not changed yet.
+     */
+    @Test
+    fun the_previous_entries_stay_on_screen_with_the_filters_disabled_until_the_replacement_lands() {
+        val releaseFilteredPage = CompletableDeferred<Unit>()
+        val holding = pagedRepository(
+            animeListTitles = { status ->
+                if (status == null) (1..120).map { "Anime $it" } else listOf("Episode 1")
+            },
+            holdAnimeList = { request ->
+                if (request.url.parameters["status"] != null) releaseFilteredPage.await()
+            },
+        )
+        val holdingList = AnimeListViewModel(holding)
+        try {
+            runComposeUiTest {
+                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, holdingList) }
+                waitUntil("the unfiltered first page lands", WAIT_MS) {
+                    holdingList.state.value.entries.size == 50
+                }
+
+                onNodeWithText("Completed").performClick()
+                waitUntil("the replacement page is in flight", WAIT_MS) {
+                    holdingList.state.value.loadingFirstPage
+                }
+                waitForIdle()
+
+                onNodeWithText("Anime 1").assertIsDisplayed()
+                for (filter in listOf("All", "Watching", "Completed")) {
+                    onNodeWithText(filter).assertIsNotEnabled()
+                }
+
+                releaseFilteredPage.complete(Unit)
+                waitUntil("the replacement lands", WAIT_MS) {
+                    holdingList.state.value.entries.map { it.title } == listOf("Episode 1")
+                }
+                waitForIdle()
+
+                onNodeWithText("Anime 1").assertDoesNotExist()
+                onNodeWithText("All").assertIsEnabled()
+            }
+        } finally {
+            holding.close()
+        }
+    }
+
+    /**
      * The Anime List taking over the signed-in screen must not cost the two things that were on it.
      * Ticket 09 rehouses both into a top app bar; until then they are simply still here, and this is
      * what says so.
@@ -441,17 +572,20 @@ class SessionRouteTest {
      * holds one short page: every other test on this screen wants that, and this one cannot use it.
      */
     private fun pagedRepository(
+        animeListTitles: (String?) -> List<String> = { (1..120).map { "Anime $it" } },
         failAnimeListAt: (Int) -> Boolean = { false },
-        onAnimeListOffset: (String) -> Unit = {},
+        holdAnimeList: suspend (HttpRequestData) -> Unit = {},
+        onAnimeListRequest: (Url) -> Unit = {},
     ) = MalSessionRepository(
         store,
         initialConfig = MalAuthConfig(clientId = "a-client-id"),
         clientFactory = fakeMal(
-            animeListTitles = (1..120).map { "Anime $it" },
+            animeListTitles = animeListTitles,
             failAnimeListAt = failAnimeListAt,
+            holdAnimeList = holdAnimeList,
             onRequest = { request ->
                 if (request.url.encodedPath.endsWith("/users/@me/animelist")) {
-                    onAnimeListOffset(request.url.parameters["offset"].orEmpty())
+                    onAnimeListRequest(request.url)
                 }
             },
         ),

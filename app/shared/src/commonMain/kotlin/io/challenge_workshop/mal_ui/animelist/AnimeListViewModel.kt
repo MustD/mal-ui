@@ -45,4 +45,22 @@ class AnimeListViewModel(repository: MalSessionRepository) : ViewModel() {
     fun retry() {
         viewModelScope.launch { pager.retry() }
     }
+
+    /**
+     * Filters the Anime List to one Watch Status, or to the whole list for null.
+     *
+     * Filtering is MAL's job: the list is paged, so it is never wholly in memory, so this discards
+     * every loaded page and refetches from `offset=0`. The pager keeps the old entries observable
+     * until the replacement lands, which is what stops the screen flashing empty on every tap.
+     *
+     * Re-picking the active filter is dropped rather than refetched — a chip is a filter, not a
+     * reload, and the two are separate controls. Unless that filter's own first page failed, in
+     * which case the chip is the gesture a person reaches for and there is nothing on screen for it
+     * to disturb.
+     */
+    fun setWatchStatus(watchStatus: WatchStatus?) {
+        val current = state.value
+        if (current.watchStatus == watchStatus && current.firstPageError == null) return
+        viewModelScope.launch { pager.reset(watchStatus = watchStatus) }
+    }
 }

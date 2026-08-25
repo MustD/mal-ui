@@ -25,6 +25,7 @@ import io.challenge_workshop.mal_ui.auth.ANIME_LIST_MORE_TAG
 import io.challenge_workshop.mal_ui.auth.ErrorCard
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 
 /**
  * The Anime List: the user's own List Entries as plain rows.
@@ -77,7 +78,15 @@ fun LazyListScope.animeListItems(
     if (state.loaded && state.exhausted && state.entries.isEmpty() && state.firstPageError == null) {
         item {
             Text(
-                "There is nothing on your MyAnimeList yet.",
+                // Two different facts, and the fix for each is different: an empty account is
+                // something to go and do on myanimelist.net, an empty slice is a filter to undo.
+                // Ticket 06 names the filter and puts a "Show all" beside this; what matters now is
+                // that a filter matching nothing does not get reported as an empty account.
+                if (state.watchStatus == null) {
+                    "There is nothing on your MyAnimeList yet."
+                } else {
+                    "Nothing on your MyAnimeList matches this filter."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = itemModifier,
@@ -144,6 +153,13 @@ fun LazyListScope.animeListItems(
  *   can be dispatched inside the same frame on Android — and a chrome-only layout is trivially
  *   "near its end", so without the floor the trigger fires over a list nobody has seen a row of.
  *
+ * **[revision] disarms it across a replacement.** When a filter change swaps the content out, the
+ * layout in hand was measured against the list that is gone — and if the user changed filter from
+ * the bottom of a long list, that layout says "near the end" while the replacement is fifty entries
+ * that nobody has scrolled a pixel of. Firing there fetches a second page of the new list before its
+ * first page has been looked at. So the effect restarts on a new revision and waits for the list to
+ * be back at the top, which is where the screen has already asked it to go.
+ *
  * [enabled] is the caller's business: it is what stops this asking a pager that is exhausted or has
  * not loaded anything yet.
  *
@@ -154,17 +170,26 @@ fun LazyListScope.animeListItems(
 fun LoadMoreWhenNearEnd(
     listState: LazyListState,
     loadedCount: Int,
+    revision: Int,
     enabled: Boolean,
     onLoadMore: () -> Unit,
 ) {
     if (!enabled) return
-    // Read through `rememberUpdatedState`, not captured: the effect is keyed on the list alone, so
-    // it survives every recomposition — and a captured `loadedCount` would be the count from the
-    // composition that started it, which is the one count guaranteed to be stale. Reading a `State`
-    // inside `snapshotFlow` also makes the change itself an emission, which is the re-arm.
+    // Read through `rememberUpdatedState`, not captured: the effect is keyed on the list and the
+    // revision, so it survives every recomposition — and a captured `loadedCount` would be the count
+    // from the composition that started it, which is the one count guaranteed to be stale. Reading a
+    // `State` inside `snapshotFlow` also makes the change itself an emission, which is the re-arm.
     val currentCount = rememberUpdatedState(loadedCount)
     val currentLoadMore = rememberUpdatedState(onLoadMore)
-    LaunchedEffect(listState) {
+    LaunchedEffect(listState, revision) {
+        // Read off the *laid-out* items rather than off `firstVisibleItemIndex`: the screen sends
+        // the list back to the top with `requestScrollToItem`, which moves that index immediately
+        // and leaves the layout itself untouched until the next measure. Waiting on the index would
+        // therefore wave through the very layout this is here to reject. Returns at once when the
+        // list is already at the top, so the first page pays nothing for this.
+        if (revision > 0) {
+            snapshotFlow { listState.layoutInfo.visibleItemsInfo.firstOrNull()?.index }.first { it == 0 }
+        }
         snapshotFlow {
             val loaded = currentCount.value
             val layout = listState.layoutInfo

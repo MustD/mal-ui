@@ -49,3 +49,12 @@ val ANIME_LIST_TAG: String = "${SessionScreenTag.SignedIn.tag}.animeList"
  * — are invisible in an assertion over entries.
  */
 val ANIME_LIST_MORE_TAG: String = "$ANIME_LIST_TAG.more"
+
+/**
+ * The Watch Status filter row above the Anime List.
+ *
+ * Sibling of the list rather than an item in it: the filter is a control over the list and has to
+ * stay reachable from wherever the user has scrolled to, and a control that scrolls away from a list
+ * fifty entries at a time is one the user cannot get back to.
+ */
+val ANIME_LIST_FILTERS_TAG: String = "${SessionScreenTag.SignedIn.tag}.filters"

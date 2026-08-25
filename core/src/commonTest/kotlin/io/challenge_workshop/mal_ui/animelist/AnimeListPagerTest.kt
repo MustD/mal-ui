@@ -351,4 +351,127 @@ class AnimeListPagerTest {
         assertEquals(WatchStatus.Completed, pager.state.value.watchStatus)
         assertTrue(pager.state.value.exhausted, "the new page carries no `paging.next`")
     }
+
+    /**
+     * The other half of a filter change: the pages *after* the first one.
+     *
+     * `offset` is driven from here, so a reset that forgot to put it back would page the new list
+     * from wherever the old one had got to — silently skipping the first N entries of the slice the
+     * user just asked for. Every request after the change also has to keep carrying the new
+     * `status`, which is the part a pager holding the filter only at request time gets wrong.
+     */
+    @Test
+    fun paging_continues_from_the_new_list_after_a_filter_change() = runTest {
+        var filtered = false
+        val (pager, mal) = pagerOver(
+            pageSize = 2,
+            animeList = { offset ->
+                val firstId = if (filtered) 100L + offset else 1L + offset
+                AnimeListResponse.Page(fakeEntries(2, firstId = firstId), hasMore = true)
+            },
+        )
+        pager.loadFirstPage()
+        pager.next()
+
+        filtered = true
+        pager.reset(watchStatus = WatchStatus.Watching)
+        pager.next()
+
+        assertContentEquals(
+            listOf(100L, 101L, 102L, 103L),
+            pager.state.value.entries.map { it.animeId },
+            "the new list must page from its own start, with nothing of the old one left",
+        )
+        assertEquals(
+            listOf("0", "2", "0", "2"),
+            mal.animeListRequests.map { it.parameters["offset"] },
+            "`offset` went back to 0 with the filter, then advanced through the new list",
+        )
+        assertEquals(
+            listOf(null, null, "watching", "watching"),
+            mal.animeListRequests.map { it.parameters["status"] },
+            "every request after the change carries the new filter, not just the first",
+        )
+    }
+
+    /**
+     * The filter can change while a later page is still in flight — the next page is fetched by
+     * proximity, so a prefetch is running for most of the time the user spends scrolling, and a chip
+     * disabled only while the *first* page loads does not cover it.
+     *
+     * Two things must hold. The reset must actually make its request rather than losing to the
+     * in-flight one's claim on the loading slot; and the superseded page must not land, because
+     * appending a page of the old filter's list under the new filter is the one failure a user would
+     * read as the filter simply not working.
+     */
+    @Test
+    fun a_filter_change_supersedes_a_page_that_is_still_in_flight() = runTest {
+        val releaseStalePage = CompletableDeferred<Unit>()
+        var filtered = false
+        val (pager, mal) = pagerOver(
+            pageSize = 2,
+            animeList = { offset ->
+                if (filtered) AnimeListResponse.Page(fakeEntries(2, firstId = 100), hasMore = false)
+                else AnimeListResponse.Page(fakeEntries(2, firstId = offset + 1L), hasMore = true)
+            },
+            holdAnimeList = { offset -> if (offset > 0) releaseStalePage.await() },
+        )
+        pager.loadFirstPage()
+
+        val stale = backgroundScope.launch { pager.next() }
+        pager.state.first { it.loadingMore }
+
+        filtered = true
+        pager.reset(watchStatus = WatchStatus.Dropped)
+
+        assertContentEquals(
+            listOf(100L, 101L),
+            pager.state.value.entries.map { it.animeId },
+            "the replacement page landed even though offset=2 still held the loading slot",
+        )
+
+        releaseStalePage.complete(Unit)
+        stale.join()
+
+        assertContentEquals(
+            listOf(100L, 101L),
+            pager.state.value.entries.map { it.animeId },
+            "the superseded page must not append itself to the list of a different filter",
+        )
+        assertTrue(pager.state.value.exhausted, "and must not undo the new page's exhaustion either")
+        assertEquals("dropped", mal.animeListRequests.last().parameters["status"])
+    }
+
+    /**
+     * A filter change that fails must not leave the *previous* filter's entries under the chip the
+     * user just tapped.
+     *
+     * The old entries staying observable is deliberate and is what stops the screen flashing empty
+     * — but only until the replacement resolves. Resolving as a failure and keeping them shows one
+     * slice of the list labelled as another, which is worse than showing nothing: there is no way
+     * for the user to tell it happened.
+     */
+    @Test
+    fun a_failed_filter_change_discards_the_slice_it_was_replacing() = runTest {
+        var failing = false
+        val (pager, _) = pagerOver(
+            pageSize = 2,
+            animeList = { _ ->
+                if (failing) AnimeListResponse.Failure() else AnimeListResponse.Page(fakeEntries(2), hasMore = true)
+            },
+        )
+        pager.loadFirstPage()
+        assertEquals(2, pager.state.value.entries.size)
+
+        failing = true
+        pager.reset(watchStatus = WatchStatus.PlanToWatch)
+
+        val state = pager.state.value
+        assertTrue(
+            state.entries.isEmpty(),
+            "the unfiltered entries are not the Plan to Watch slice, and the chip now says they are",
+        )
+        assertNotNull(state.firstPageError)
+        assertTrue(!state.loaded, "nothing landed, so this must not read as an empty filtered list")
+    }
 }

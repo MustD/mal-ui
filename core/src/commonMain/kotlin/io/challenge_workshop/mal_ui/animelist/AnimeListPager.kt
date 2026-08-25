@@ -31,6 +31,16 @@ data class AnimeListState(
      * asked yet", which are the same [entries] and must not be the same screen.
      */
     val loaded: Boolean = false,
+    /**
+     * Bumped every time a first page *replaces* [entries] — a filter change, a Sort Order change, a
+     * reload, or the retry of a failed first page.
+     *
+     * It is here rather than being inferred by the screen because a replacement is not visible in
+     * any other field: the entries can come back identical, and `loadingFirstPage` has already gone
+     * false again by the time anything collects. What the screen does with it is scroll back to the
+     * top, and a scroll position into a list that no longer exists is what it is avoiding.
+     */
+    val revision: Int = 0,
 )
 
 /**
@@ -62,6 +72,17 @@ class AnimeListPager(
      * came back, because MAL pages by position and a short page is not the end of the list.
      */
     private var nextOffset: Int = 0
+
+    /**
+     * Bumped by [reset]. A [load] that finishes holding a stale one discards its page.
+     *
+     * The next page is fetched by proximity, so a prefetch is in flight for much of the time the
+     * user spends scrolling — and disabling the filter controls while the *first* page loads does
+     * not cover that window. Appending the old filter's page under the new filter reads as the
+     * filter not having worked at all, which is why this is the pager's problem rather than the
+     * screen's.
+     */
+    private var generation: Int = 0
 
     /**
      * The first page, unless one has already landed or is already in flight.
@@ -112,6 +133,7 @@ class AnimeListPager(
         sortOrder: AnimeListSortOrder = _state.value.sortOrder,
     ) {
         nextOffset = 0
+        generation++
         _state.update {
             it.copy(
                 watchStatus = watchStatus,
@@ -119,6 +141,11 @@ class AnimeListPager(
                 exhausted = false,
                 moreError = null,
                 firstPageError = null,
+                // Released rather than waited for: whatever holds the slot is now superseded, and
+                // its page will be discarded when it lands. Leaving it claimed would make the reset
+                // itself a no-op — a chip tap during a prefetch that quietly did nothing.
+                loadingFirstPage = false,
+                loadingMore = false,
             )
         }
         load()
@@ -134,6 +161,7 @@ class AnimeListPager(
     private suspend fun load() {
         val first = nextOffset == 0
         if (!begin(first)) return
+        val mine = generation
         val query = _state.value
         try {
             val page = client.page(
@@ -142,6 +170,10 @@ class AnimeListPager(
                 watchStatus = query.watchStatus,
                 sortOrder = query.sortOrder,
             )
+            // A reset landed while this was in flight, so this page is of a list the user has
+            // stopped looking at. Nothing to clear either: the reset released the loading slot and
+            // its own load owns it now.
+            if (mine != generation) return
             nextOffset += pageSize
             _state.update {
                 it.copy(
@@ -150,17 +182,25 @@ class AnimeListPager(
                     exhausted = !page.hasMore,
                     loadingFirstPage = false,
                     loadingMore = false,
+                    revision = if (first) it.revision + 1 else it.revision,
                 )
             }
         } catch (e: CancellationException) {
-            // The screen went away, or a reset superseded this. Not a failure to report — and
-            // clearing the loading flag is the caller's problem, because there is no caller left.
-            _state.update { it.copy(loadingFirstPage = false, loadingMore = false) }
+            // The screen went away. Not a failure to report — and clearing the loading flag is
+            // the caller's problem, because there is no caller left. Unless a reset superseded
+            // this, in which case the flags now belong to its load and must not be cleared here.
+            if (mine == generation) {
+                _state.update { it.copy(loadingFirstPage = false, loadingMore = false) }
+            }
             throw e
         } catch (e: Exception) {
             // `MalAnimeListClient` has already wrapped a transport failure into a `MalAuthException`
             // with a message worth showing; anything else that got this far is a bug, and a bug that
             // shows as a retryable error beats one that takes the screen down.
+            //
+            // Superseded the same way a success is: a stale page's failure is not the new list's
+            // error, and showing it would put a retry on screen that re-requests the wrong slice.
+            if (mine != generation) return
             fail(first, e.message ?: e.toString())
         }
     }
@@ -190,10 +230,24 @@ class AnimeListPager(
         return claimed
     }
 
+    /**
+     * A failed page, as one of the two error states.
+     *
+     * A failed **first** page also discards the entries, which only matters after a [reset]: those
+     * entries are the *previous* filter's, and leaving them under the chip the user just tapped
+     * shows them somebody else's slice labelled as theirs. Discarding them is also what makes a
+     * failed reset reach the same full-screen error as a failed initial load, rather than a third
+     * state that is an error card floating over a stale list.
+     */
     private fun fail(first: Boolean, message: String) {
         _state.update {
             if (first) {
-                it.copy(loadingFirstPage = false, firstPageError = message)
+                it.copy(
+                    entries = emptyList(),
+                    loaded = false,
+                    loadingFirstPage = false,
+                    firstPageError = message,
+                )
             } else {
                 it.copy(loadingMore = false, moreError = message)
             }

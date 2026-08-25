@@ -37,6 +37,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.challenge_workshop.mal_ui.animelist.AnimeListFilters
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.animelist.LoadMoreWhenNearEnd
 import io.challenge_workshop.mal_ui.animelist.animeListItems
@@ -234,17 +235,49 @@ fun SignedInScreen(
     LoadMoreWhenNearEnd(
         listState = listState,
         loadedCount = list.entries.size,
+        revision = list.revision,
         enabled = list.loaded && !list.exhausted,
         onLoadMore = animeList::loadMore,
     )
 
+    // The replacement page has landed and the content underneath the user's scroll position has
+    // been swapped out, so that position is into a list that no longer exists. Keyed on the pager's
+    // revision rather than on the filter, because the scroll has to happen when the new page
+    // *arrives*, not when the chip is tapped — the old entries are deliberately still on screen in
+    // between.
+    //
+    // `requestScrollToItem`, not `scrollToItem`: it is applied by the very measure pass that first
+    // lays the new entries out, so no frame is ever laid out with the new list at the old scroll
+    // position. Suspending until after that frame instead would leave one — and a user who changed
+    // filter from the bottom of a long list would be at the bottom of the new one for it, which is
+    // exactly where `LoadMoreWhenNearEnd` fires and fetches a page nobody scrolled to.
+    LaunchedEffect(list.revision) {
+        if (list.revision > 0) listState.requestScrollToItem(0)
+    }
+
     // The screen tag is on this wrapper rather than on the list, because the list carries its own
     // and a second `testTag` would replace it.
-    Box(modifier.fillMaxSize()) {
+    Column(
+        modifier = modifier.fillMaxSize().safeContentPadding(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // Outside the lazy list, so it stays put while the list scrolls under it. Ticket 09 puts
+        // the top app bar above it; until then it is simply the top of the screen.
+        AnimeListFilters(
+            selected = list.watchStatus,
+            enabled = !list.loadingFirstPage,
+            onSelect = animeList::setWatchStatus,
+            // The same column width the list's own items get, so the row lines up with the
+            // entries it filters rather than running the full width of a desktop window.
+            modifier = Modifier.paneItem().padding(horizontal = 16.dp, vertical = 8.dp),
+        )
         LazyColumn(
+            // `weight`, not `fillMaxSize`: a child that fills the height inside a `Column` takes
+            // the whole window and hangs the last entries of the list below the bottom of it,
+            // because the filter row above has already taken its share.
             modifier = Modifier
-                .fillMaxSize()
-                .safeContentPadding()
+                .fillMaxWidth()
+                .weight(1f)
                 .testTag(ANIME_LIST_TAG),
             state = listState,
             contentPadding = PaddingValues(16.dp),

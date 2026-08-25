@@ -57,21 +57,27 @@ private fun animeListJson(titles: List<String>, offset: Int, limit: Int): String
 }
 
 /**
- * @param animeListTitles the whole Anime List this fake holds, paged off the request's own `offset`
- * and `limit` rather than off a size fixed here — so a test about paging is testing the offsets the
- * app actually drives. The default is short enough to fit one page, which is what every test that
- * is not about paging wants.
+ * @param animeListTitles the whole Anime List this fake holds **for a given `status` parameter** —
+ * null being All — paged off the request's own `offset` and `limit` rather than off a size fixed
+ * here, so a test about paging is testing the offsets the app actually drives. Keyed on the status
+ * because that is how a filter test tells the slices apart: identical titles under two filters
+ * cannot show that the filter reached MAL at all. The default is short enough to fit one page,
+ * which is what every test that is not about filtering or paging wants.
  * @param failAnimeListAt asked for each Anime List request's `offset`. Answering true makes MAL
  * fail that page — which is a different screen from a failed first page, and the only way to reach
  * the retry at the bottom of the list. Consulted per request rather than fixed, so a test can let
  * the retry succeed.
+ * @param holdAnimeList suspends before an Anime List request is answered. Without it every request
+ * completes before the next line of the test runs, and the states that exist only *while* a page is
+ * in flight — the old entries still on screen, the filter row disabled — cannot be looked at.
  * @param onRequest every request, before it is answered. For counting: "did that redirect produce a
  * second token exchange" is otherwise only inferable from a downstream error. Last, so it stays
  * reachable as a trailing lambda.
  */
 internal fun fakeMal(
-    animeListTitles: List<String> = FAKE_MAL_ANIME_TITLES,
+    animeListTitles: (String?) -> List<String> = { FAKE_MAL_ANIME_TITLES },
     failAnimeListAt: (Int) -> Boolean = { false },
+    holdAnimeList: suspend (HttpRequestData) -> Unit = {},
     onRequest: (HttpRequestData) -> Unit = {},
 ): HttpClientFactory {
     val engine = MockEngine { request ->
@@ -86,15 +92,17 @@ internal fun fakeMal(
             )
 
             request.url.encodedPath.endsWith("/users/@me/animelist") -> {
+                holdAnimeList(request)
                 val offset = request.url.parameters["offset"]?.toInt() ?: 0
+                val titles = animeListTitles(request.url.parameters["status"])
                 if (failAnimeListAt(offset)) {
                     respondError(HttpStatusCode.ServiceUnavailable, "boom")
                 } else {
                     respond(
                         content = animeListJson(
-                            titles = animeListTitles,
+                            titles = titles,
                             offset = offset,
-                            limit = request.url.parameters["limit"]?.toInt() ?: animeListTitles.size,
+                            limit = request.url.parameters["limit"]?.toInt() ?: titles.size,
                         ),
                         status = HttpStatusCode.OK,
                         headers = json,
