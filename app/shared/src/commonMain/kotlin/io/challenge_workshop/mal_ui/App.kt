@@ -6,7 +6,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil3.compose.setSingletonImageLoaderFactory
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
+import io.challenge_workshop.mal_ui.animelist.malImageLoader
 import io.challenge_workshop.mal_ui.auth.AuthRedirectChannel
 import io.challenge_workshop.mal_ui.auth.AuthorizingScreen
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
@@ -32,6 +34,14 @@ fun App(
     viewModel: MalSessionViewModel = koinViewModel(),
     animeList: AnimeListViewModel = koinViewModel(),
 ) {
+    // Coil's singleton, replaced here at the root because its default cannot fetch over the network
+    // on the web Targets — see [malImageLoader]. `setSingletonImageLoaderFactory` remembers the
+    // factory, so this is once per process and not once per recomposition. Deliberately *not* in
+    // `initKoin()`: the loader needs a `PlatformContext`, which on Android is the one thing only a
+    // composition (or an Activity) has, and each entry point starting Koin differently is exactly
+    // how three of the four Targets would end up without one.
+    setSingletonImageLoaderFactory { context -> malImageLoader(context) }
+
     MaterialTheme {
         Surface(modifier = Modifier) {
             SessionRoute(viewModel.state.collectAsStateWithLifecycle().value, viewModel, animeList)

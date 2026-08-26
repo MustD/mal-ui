@@ -52,6 +52,7 @@ kotlin {
             // `ActivityResultLauncher` from a composable — and the reason
             // `rememberAuthRedirectChannel()` is a `@Composable` at all.
             implementation(libs.androidx.activity.compose)
+            implementation(libs.ktor.clientOkhttp)
         }
         commonMain.dependencies {
             api(project(":core"))
@@ -60,6 +61,11 @@ kotlin {
             implementation(libs.compose.material3)
             implementation(libs.compose.ui)
             implementation(libs.compose.components.resources)
+            // Cover art. Coil 3 is the only image loader with all four of this project's targets;
+            // `coil-network-ktor3` is what makes it fetch over Ktor rather than over a
+            // platform-specific stack, so one `MalImageLoader` covers every Target.
+            implementation(libs.coil.compose)
+            implementation(libs.coil.networkKtor3)
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.androidx.lifecycle.viewmodelCompose)
             implementation(libs.androidx.lifecycle.runtimeCompose)
@@ -95,6 +101,16 @@ kotlin {
         }
         jsMain.dependencies {
             implementation(libs.wrappers.browser)
+        }
+        // Coil's Ktor fetcher builds an engine-less `HttpClient()` of its own, so — exactly as in
+        // `:core` — an engine has to be on each target's runtime classpath for it to resolve one.
+        // Declared here rather than leaned on transitively through `:core`, where they are
+        // `implementation` details that are free to change.
+        jvmMain.dependencies {
+            implementation(libs.ktor.clientCio)
+        }
+        webMain.dependencies {
+            implementation(libs.ktor.clientJs)
         }
     }
 }

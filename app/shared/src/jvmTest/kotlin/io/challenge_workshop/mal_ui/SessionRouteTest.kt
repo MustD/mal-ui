@@ -22,6 +22,9 @@ import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onChildren
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
@@ -29,6 +32,7 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.text.AnnotatedString
 import io.challenge_workshop.mal_ui.animelist.ANIME_LIST_SORT_ORDERS
+import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.animelist.MY_ANIME_LIST_URL
 import io.challenge_workshop.mal_ui.animelist.sortLabel
@@ -48,6 +52,7 @@ import io.challenge_workshop.mal_ui.auth.ANIME_LIST_SORT_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_TAG
 import io.challenge_workshop.mal_ui.auth.FAKE_MAL_ANIME_TITLES
 import io.challenge_workshop.mal_ui.auth.SessionScreenTag
+import io.challenge_workshop.mal_ui.auth.SignedInScreen
 import io.challenge_workshop.mal_ui.auth.fakeMal
 import io.challenge_workshop.mal_ui.mal.DESKTOP_LOOPBACK_PORT
 import io.challenge_workshop.mal_ui.mal.DESKTOP_REDIRECT_URI
@@ -270,7 +275,16 @@ class SessionRouteTest {
      * The signed-in branch is the Anime List now, so "it renders something" is no longer enough:
      * what has to be on screen is the user's own entries, fetched through the repository's
      * authenticated client. The fetch is real — [fakeMal] answers it — so this covers the whole path
-     * from a MAL response to a row, which is the ticket's tracer bullet.
+     * from a MAL response to a card, which is the ticket's tracer bullet.
+     *
+     * Every fact the spec asks a List Entry to carry is asserted, because they arrive from three
+     * different places in MAL's response — the anime, the user's `list_status`, and a field MAL is
+     * free to omit — and a card that quietly lost one would still render.
+     *
+     * Cover art itself is not asserted and [fakeMal] deliberately sends no `main_picture`: fetching
+     * one is Coil's job over a real network, which a unit test must not do. What that leaves on
+     * screen is the placeholder path, which is the case the spec cares most about anyway — MAL omits
+     * the field for entries whose art it has none of.
      */
     @Test
     fun the_signed_in_screen_renders_the_anime_list() {
@@ -285,8 +299,52 @@ class SessionRouteTest {
             for (title in FAKE_MAL_ANIME_TITLES) {
                 onNodeWithText(title).assertIsDisplayed()
             }
-            // Watched-of-total, which is the other half of what a row is for.
+            // Watched-of-total and the user's own score share a line on a card, so this one node
+            // carries both. `substring`, because what is asserted is that the two facts are there
+            // and not how they are punctuated.
+            onNodeWithText("3 / 26 · Score 8", substring = true).assertIsDisplayed()
+            // The Watch Status, the media type and the Airing Status, which are what make an
+            // unfiltered list legible. `onAllNodes`, because both fixture entries carry the same
+            // three — a metadata line that were unique per entry would be testing the fixture.
+            onAllNodesWithText("Watching · TV · Finished")[0].assertIsDisplayed()
+        }
+    }
+
+    /**
+     * The dense Layout renders the same List Entries as the card grid.
+     *
+     * Ticket 08 is what lets a person choose it, so nothing on the routed screen reaches it yet —
+     * which is exactly why it is worth a test now: an unreachable Layout is one that rots. Rendered
+     * through [SignedInScreen] rather than [SessionRoute] because the Layout is a parameter of the
+     * screen and not a state of the Session.
+     *
+     * The same facts as the card, because "the same entries, drawn densely" is the whole claim: a
+     * dense row that dropped the Airing Status would be a second, quieter rendering of an entry.
+     */
+    @Test
+    fun the_dense_layout_renders_the_same_entries() {
+        runComposeUiTest {
+            setContent {
+                SignedInScreen(
+                    state = SessionState.SignedIn(MalUser(1, "someone")),
+                    viewModel = viewModel,
+                    animeList = animeList,
+                    layout = AnimeListLayout.List,
+                )
+            }
+
+            waitUntil("the first page lands", WAIT_MS) {
+                animeList.state.value.entries.size == FAKE_MAL_ANIME_TITLES.size
+            }
+
+            for (title in FAKE_MAL_ANIME_TITLES) {
+                onNodeWithText(title).assertIsDisplayed()
+            }
+            // A dense row splits what a card joins, so these are three nodes rather than two.
+            // `onAllNodes` wherever both fixture entries share the value.
             onNodeWithText("3 / 26").assertIsDisplayed()
+            onAllNodesWithText("Score 8")[0].assertIsDisplayed()
+            onAllNodesWithText("Watching · TV · Finished")[0].assertIsDisplayed()
         }
     }
 
@@ -668,6 +726,10 @@ class SessionRouteTest {
     /**
      * Ticket 06's first state. A centred spinner and a list are different shapes, so the page jumps
      * when the data lands; a skeleton is the list, drawn empty.
+     *
+     * `onAllNodesWithTag`, because the skeleton is one tagged placeholder per grid cell rather than
+     * one tagged wrapper — which is what lets the grid lay the placeholders out at the very column
+     * width the cards replacing them will get.
      */
     @Test
     fun the_first_page_shows_a_skeleton_in_the_shape_of_the_list() {
@@ -680,13 +742,13 @@ class SessionRouteTest {
                 waitUntil("the first page is in flight", WAIT_MS) { holdingList.state.value.loadingFirstPage }
                 waitForIdle()
 
-                onNodeWithTag(ANIME_LIST_SKELETON_TAG).assertIsDisplayed()
+                onAllNodesWithTag(ANIME_LIST_SKELETON_TAG)[0].assertIsDisplayed()
 
                 releaseFirstPage.complete(Unit)
                 waitUntil("the first page lands", WAIT_MS) { holdingList.state.value.entries.size == 50 }
                 waitForIdle()
 
-                onNodeWithTag(ANIME_LIST_SKELETON_TAG).assertDoesNotExist()
+                onAllNodesWithTag(ANIME_LIST_SKELETON_TAG).assertCountEquals(0)
                 onNodeWithText("Anime 1").assertIsDisplayed()
             }
         } finally {
@@ -790,7 +852,7 @@ class SessionRouteTest {
                 waitForIdle()
 
                 onNodeWithTag(ANIME_LIST_ERROR_TAG).assertIsDisplayed()
-                onNodeWithTag(ANIME_LIST_SKELETON_TAG).assertDoesNotExist()
+                onAllNodesWithTag(ANIME_LIST_SKELETON_TAG).assertCountEquals(0)
                 onNodeWithTag(ANIME_LIST_MORE_TAG).assertDoesNotExist()
                 onNodeWithTag(ANIME_LIST_EMPTY_TAG).assertDoesNotExist()
 

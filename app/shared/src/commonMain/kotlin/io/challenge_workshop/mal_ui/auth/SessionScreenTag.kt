@@ -56,6 +56,10 @@ val ANIME_LIST_MORE_TAG: String = "$ANIME_LIST_TAG.more"
  * Its own tag because "is the skeleton on screen" is the one question that cannot be asked of the
  * pager's state — `loadingFirstPage` says a request is in flight, not that the screen chose the
  * skeleton over a spinner, and the difference between the two is the whole of the state.
+ *
+ * **On every placeholder, not on a wrapper around them**, so a test asks `onAllNodesWithTag`. The
+ * placeholders are grid cells like the entries that replace them — which is the only way they can
+ * be laid out at the same column width — and a wrapper is exactly the thing a grid cannot lay out.
  */
 val ANIME_LIST_SKELETON_TAG: String = "$ANIME_LIST_TAG.skeleton"
 

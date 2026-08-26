@@ -139,3 +139,25 @@ internal object AiringStatusSerializer : WireEnumSerializer<AiringStatus>(
     toWire = { it.wireValue },
     fromWire = AiringStatus::fromWire,
 )
+
+/**
+ * How the Anime List is drawn: a grid of cards with cover art, or a dense list of rows.
+ *
+ * Presentation, and yet it lives here rather than beside the composables, for the reason
+ * [AnimeListSortOrder] does: it is the *choice*, not the drawing of it, and the choice is the half
+ * that gets stored. The spec has it becoming a fourth `JsonTokenStore` record — the store is
+ * `:core`'s — and ticket 08 is what writes it there; until then this is the type the screen's
+ * `layout` parameter is, and nothing persists.
+ *
+ * Nothing about it reaches MAL: a Layout change re-draws what is already loaded and issues no
+ * request, which is why [AnimeListPager] has never heard of it. The Compose side of it — how many
+ * columns each one gets, how wide it may be — is in `:app:shared`, because `:server` depends on this
+ * module and has no business carrying a `Dp`.
+ *
+ * [Cards] is the default. The feature was asked for as a grid of cover art, and a first launch that
+ * opened on the dense list would be showing the Layout nobody chose.
+ */
+enum class AnimeListLayout {
+    Cards,
+    List,
+}

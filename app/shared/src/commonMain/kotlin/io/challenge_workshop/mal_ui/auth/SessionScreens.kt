@@ -10,8 +10,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeContentPadding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -38,10 +38,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.challenge_workshop.mal_ui.animelist.AnimeListFilters
+import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
 import io.challenge_workshop.mal_ui.animelist.AnimeListSortMenu
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.animelist.LoadMoreWhenNearEnd
 import io.challenge_workshop.mal_ui.animelist.animeListItems
+import io.challenge_workshop.mal_ui.animelist.fullLineSpan
+import io.challenge_workshop.mal_ui.animelist.contentMaxWidth
+import io.challenge_workshop.mal_ui.animelist.gridCells
 import io.challenge_workshop.mal_ui.session.SessionState
 import io.challenge_workshop.mal_ui.session.SignedOutReason
 
@@ -199,10 +203,16 @@ fun AuthorizingScreen(
  * The signed-in screen, which **is** the Anime List.
  *
  * **One scroll container, and it is lazy.** The Anime List is unbounded now — scrolling near its end
- * fetches the next page — and a lazy list cannot be nested inside a scrolling [Column], so the
- * chrome around the list became items in the list rather than the list becoming a child of the
- * chrome. That is also what gives the paging trigger a `LazyListState` to read the last-visible
+ * fetches the next page — and a lazy layout cannot be nested inside a scrolling [Column], so the
+ * chrome around the list became items in the grid rather than the grid becoming a child of the
+ * chrome. That is also what gives the paging trigger a `LazyGridState` to read the last-visible
  * index off, which is the one signal that means the same thing on all four Targets.
+ *
+ * **One `LazyVerticalGrid` for both Layouts.** The dense Layout is the same grid at one column, so
+ * [layout] changes the column count and the width cap and nothing else — no second scroll state, no
+ * second paging trigger, and no second copy of the five screen states. [layout] is a parameter with
+ * the default this release ships; ticket 08 is what makes it a remembered choice, and it is already
+ * a parameter so both Layouts are reachable from a test before then.
  *
  * **All of that chrome sits *above* the entries, and that is not a layout preference.** Anything
  * placed after them is unreachable on a real account: every scroll towards it enters the prefetch
@@ -221,9 +231,11 @@ fun SignedInScreen(
     viewModel: MalSessionViewModel,
     animeList: AnimeListViewModel,
     modifier: Modifier = Modifier,
+    layout: AnimeListLayout = AnimeListLayout.Cards,
 ) {
-    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
     val list = animeList.state.collectAsStateWithLifecycle().value
+    val contentWidth = Modifier.widthIn(max = layout.contentMaxWidth()).fillMaxWidth()
 
     // Not in the ViewModel's `init`: the pager must only ask MAL for a list once there is a
     // signed-in screen to show one on. The pager itself ignores a repeat, so a recomposition
@@ -234,7 +246,7 @@ fun SignedInScreen(
     // is a list that has silently stopped. Disarmed once exhausted, so the trigger costs nothing at
     // the bottom of a finished list.
     LoadMoreWhenNearEnd(
-        listState = listState,
+        gridState = gridState,
         loadedCount = list.entries.size,
         revision = list.revision,
         enabled = list.loaded && !list.exhausted,
@@ -253,7 +265,7 @@ fun SignedInScreen(
     // filter from the bottom of a long list would be at the bottom of the new one for it, which is
     // exactly where `LoadMoreWhenNearEnd` fires and fetches a page nobody scrolled to.
     LaunchedEffect(list.revision) {
-        if (list.revision > 0) listState.requestScrollToItem(0)
+        if (list.revision > 0) gridState.requestScrollToItem(0)
     }
 
     // The screen tag is on this wrapper rather than on the list, because the list carries its own
@@ -262,15 +274,15 @@ fun SignedInScreen(
         modifier = modifier.fillMaxSize().safeContentPadding(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Outside the lazy list, so both controls stay put while the list scrolls under them.
+        // Outside the lazy grid, so both controls stay put while the list scrolls under them.
         // Ticket 09 puts the top app bar above them; until then they are simply the top of the
-        // screen. The same column width the list's own items get, so they line up with the entries
-        // they act on rather than running the full width of a desktop window.
-        // The padding goes *outside* the width cap, not inside it: `paneItem()` caps the content at
-        // 560dp, and padding applied after it would spend 32dp of that cap and leave these controls
-        // inset from the very entries they act on — the `LazyColumn` pads its entries with
-        // `contentPadding`, which is outside their cap.
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).paneItem()) {
+        // screen. `contentWidth` is the grid's own cap, so they line up with the entries they act on
+        // rather than running the full width of a desktop window — and so the dense Layout's
+        // narrower list does not leave its filter row floating out over empty surface.
+        // The padding goes *outside* the width cap, not inside it: padding applied after it would
+        // spend 32dp of that cap and leave these controls inset from the very entries they act on —
+        // the grid pads its own with `contentPadding`, which is outside their cap.
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).then(contentWidth)) {
             AnimeListFilters(
                 selected = list.watchStatus,
                 // Both are disabled by the same flag, because both go through the same reset: the
@@ -285,21 +297,24 @@ fun SignedInScreen(
                 onSelect = animeList::setSortOrder,
             )
         }
-        LazyColumn(
+        LazyVerticalGrid(
+            // The Layout is entirely this: how many columns the entries get, and how wide the whole
+            // thing is allowed to be. Everything inside `animeListItems` is written once.
+            columns = layout.gridCells(),
             // `weight`, not `fillMaxSize`: a child that fills the height inside a `Column` takes
             // the whole window and hangs the last entries of the list below the bottom of it,
             // because the filter row above has already taken its share.
             modifier = Modifier
-                .fillMaxWidth()
                 .weight(1f)
+                .then(contentWidth)
                 .testTag(ANIME_LIST_TAG),
-            state = listState,
+            state = gridState,
             contentPadding = PaddingValues(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item {
-                Column(Modifier.paneItem(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            item(span = fullLineSpan) {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -340,11 +355,11 @@ fun SignedInScreen(
 
             animeListItems(
                 state = list,
+                layout = layout,
                 onRetry = animeList::retry,
                 // "Show all" is the same gesture as tapping the All chip, and goes through the same
                 // reset — an empty slice's way out must not become a second way of changing filter.
                 onShowAll = { animeList.setWatchStatus(null) },
-                itemModifier = Modifier.paneItem(),
             )
         }
     }
@@ -393,7 +408,14 @@ private fun ScreenColumn(modifier: Modifier = Modifier, content: @Composable () 
  * A modifier rather than a wrapper composable, because the signed-in screen's content is now lazy
  * items and there is no single node left to wrap.
  */
-internal fun Modifier.paneItem(): Modifier = widthIn(max = 560.dp).fillMaxWidth()
+internal fun Modifier.paneItem(): Modifier = widthIn(max = PANE_MAX_WIDTH).fillMaxWidth()
+
+/**
+ * One line length, in one place. The Anime List's dense Layout caps itself at the same value — a
+ * pane and a list of one-line rows are the same reading problem — and its card grid deliberately
+ * does not. See `AnimeListLayout.contentMaxWidth`.
+ */
+internal val PANE_MAX_WIDTH = 560.dp
 
 /** Internal, not private: the Anime List reuses it rather than growing an error card of its own. */
 @Composable
