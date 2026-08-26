@@ -33,9 +33,11 @@ import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.text.AnnotatedString
 import io.challenge_workshop.mal_ui.animelist.ANIME_LIST_SORT_ORDERS
 import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
+import androidx.lifecycle.ViewModelStore
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.animelist.MY_ANIME_LIST_URL
 import io.challenge_workshop.mal_ui.animelist.sortLabel
+import io.challenge_workshop.mal_ui.auth.ANIME_LIST_LAYOUT_TAG
 import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListener
 import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListenerTest
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
@@ -52,7 +54,6 @@ import io.challenge_workshop.mal_ui.auth.ANIME_LIST_SORT_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_TAG
 import io.challenge_workshop.mal_ui.auth.FAKE_MAL_ANIME_TITLES
 import io.challenge_workshop.mal_ui.auth.SessionScreenTag
-import io.challenge_workshop.mal_ui.auth.SignedInScreen
 import io.challenge_workshop.mal_ui.auth.fakeMal
 import io.challenge_workshop.mal_ui.mal.DESKTOP_LOOPBACK_PORT
 import io.challenge_workshop.mal_ui.mal.DESKTOP_REDIRECT_URI
@@ -112,7 +113,7 @@ class SessionRouteTest {
             clientFactory = fakeMal(),
         )
         viewModel = MalSessionViewModel(repository, StartupRedirect.None)
-        animeList = AnimeListViewModel(repository)
+        animeList = animeListViewModel(repository)
     }
 
     @AfterTest
@@ -311,31 +312,34 @@ class SessionRouteTest {
     }
 
     /**
-     * The dense Layout renders the same List Entries as the card grid.
+     * Toggling to the dense Layout re-draws the List Entries that are already loaded.
      *
-     * Ticket 08 is what lets a person choose it, so nothing on the routed screen reaches it yet —
-     * which is exactly why it is worth a test now: an unreachable Layout is one that rots. Rendered
-     * through [SignedInScreen] rather than [SessionRoute] because the Layout is a parameter of the
-     * screen and not a state of the Session.
+     * Driven by the control rather than by a parameter, because the Layout is a remembered choice
+     * now and the toggle is the only thing that sets it — a test that reached past the control
+     * would prove the dense rendering exists without proving anyone can get to it.
      *
      * The same facts as the card, because "the same entries, drawn densely" is the whole claim: a
      * dense row that dropped the Airing Status would be a second, quieter rendering of an entry.
      */
     @Test
-    fun the_dense_layout_renders_the_same_entries() {
+    fun toggling_to_the_dense_layout_redraws_the_same_entries() {
         runComposeUiTest {
-            setContent {
-                SignedInScreen(
-                    state = SessionState.SignedIn(MalUser(1, "someone")),
-                    viewModel = viewModel,
-                    animeList = animeList,
-                    layout = AnimeListLayout.List,
-                )
-            }
+            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
 
             waitUntil("the first page lands", WAIT_MS) {
                 animeList.state.value.entries.size == FAKE_MAL_ANIME_TITLES.size
             }
+
+            // Cards on a device that has never chosen: the feature was asked for as a grid of cover
+            // art, so a first launch opens on the Layout the user would have picked.
+            onNodeWithTag(ANIME_LIST_LAYOUT_TAG).assertIsDisplayed()
+            onNodeWithText("Cards").assertIsSelected()
+            onNodeWithText("List").performClick()
+            waitForIdle()
+
+            assertEquals(AnimeListLayout.List, animeList.layout.value)
+            onNodeWithText("List").assertIsSelected()
+            onNodeWithText("Cards").assertIsNotSelected()
 
             for (title in FAKE_MAL_ANIME_TITLES) {
                 onNodeWithText(title).assertIsDisplayed()
@@ -345,6 +349,112 @@ class SessionRouteTest {
             onNodeWithText("3 / 26").assertIsDisplayed()
             onAllNodesWithText("Score 8")[0].assertIsDisplayed()
             onAllNodesWithText("Watching · TV · Finished")[0].assertIsDisplayed()
+        }
+    }
+
+    /**
+     * A Layout change is a presentation change: it asks MAL for nothing.
+     *
+     * The one property that separates this control from the two beside it. The filter row and the
+     * Sort Order menu discard every loaded page and refetch from `offset=0`; the page size is 50 for
+     * both Layouts, so the entries already loaded are the entries the other Layout draws. A toggle
+     * that refetched would cost a user on a slow connection a page for a change of mind about
+     * column count — and would be invisible to every assertion about what is on screen, which is why
+     * this one is on the requests.
+     */
+    @Test
+    fun toggling_the_layout_refetches_nothing() {
+        val offsets = Collections.synchronizedList(mutableListOf<String>())
+        val toggled = pagedRepository(onAnimeListRequest = { offsets += it.parameters["offset"].orEmpty() })
+        val toggledList = animeListViewModel(toggled)
+        try {
+            runComposeUiTest {
+                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, toggledList) }
+
+                waitUntil("the first page lands", WAIT_MS) { toggledList.state.value.entries.size == 50 }
+                waitForIdle()
+                assertEquals(listOf("0"), offsets.toList())
+
+                onNodeWithText("List").performClick()
+                waitForIdle()
+                onNodeWithText("Cards").performClick()
+                waitForIdle()
+
+                assertEquals(
+                    listOf("0"),
+                    offsets.toList(),
+                    "a Layout change is presentation only and must not have asked MAL for anything",
+                )
+                assertEquals(
+                    50,
+                    toggledList.state.value.entries.size,
+                    "a Layout change must not have discarded the loaded entries either",
+                )
+            }
+        } finally {
+            toggled.close()
+        }
+    }
+
+    /**
+     * The Layout the user last chose is the Layout the next launch opens on.
+     *
+     * There is no process to restart in a unit test, so the restart is a *second*
+     * [AnimeListViewModel] over the same [JsonTokenStore] — which is exactly what a relaunch is from
+     * the store's point of view, and the only part of a relaunch this behaviour depends on. The
+     * control's own state is asserted alongside the rendering, because a screen that drew dense rows
+     * under a toggle still reading "Cards" is the same bug seen from the other side.
+     */
+    @Test
+    fun the_layout_is_remembered_for_the_next_launch() {
+        runComposeUiTest {
+            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
+            waitUntil("the first page lands", WAIT_MS) {
+                animeList.state.value.entries.size == FAKE_MAL_ANIME_TITLES.size
+            }
+            onNodeWithText("List").performClick()
+            waitForIdle()
+        }
+
+        val relaunched = animeListViewModel(repository)
+        try {
+            runComposeUiTest {
+                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, relaunched) }
+                waitUntil("the remembered Layout is read back", WAIT_MS) {
+                    relaunched.layout.value == AnimeListLayout.List
+                }
+                waitForIdle()
+
+                onNodeWithText("List").assertIsSelected()
+                // ...and it is the *drawing* that changed, not only the control: the dense row
+                // splits the line a card joins.
+                onNodeWithText("3 / 26").assertIsDisplayed()
+            }
+        } finally {
+            clear(relaunched)
+        }
+    }
+
+    /**
+     * A device that has never chosen opens on cards, and nothing about that is an error.
+     *
+     * The store's own default is asserted in `JsonTokenStoreTest`; what this adds is that the screen
+     * reaches it — a read that threw, or one whose absent record surfaced as a failure the screen
+     * had to handle, would show up here and nowhere else.
+     */
+    @Test
+    fun a_device_that_has_never_chosen_a_layout_opens_on_cards() {
+        val fresh = animeListViewModel(repository, store = JsonTokenStore(FakeKeyValueStore()))
+        try {
+            runComposeUiTest {
+                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, fresh) }
+                waitForIdle()
+
+                assertEquals(AnimeListLayout.Cards, fresh.layout.value)
+                onNodeWithText("Cards").assertIsSelected()
+            }
+        } finally {
+            clear(fresh)
         }
     }
 
@@ -361,7 +471,7 @@ class SessionRouteTest {
     fun scrolling_to_the_end_loads_the_next_page_until_the_list_is_exhausted() {
         val offsets = Collections.synchronizedList(mutableListOf<String>())
         val paged = pagedRepository(onAnimeListRequest = { offsets += it.parameters["offset"].orEmpty() })
-        val pagedList = AnimeListViewModel(paged)
+        val pagedList = animeListViewModel(paged)
         try {
             runComposeUiTest {
                 setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, pagedList) }
@@ -414,7 +524,7 @@ class SessionRouteTest {
     fun a_page_that_fails_mid_scroll_keeps_the_list_and_offers_a_retry_that_works() {
         var failing = true
         val flaky = pagedRepository(failAnimeListAt = { offset -> offset == 50 && failing })
-        val flakyList = AnimeListViewModel(flaky)
+        val flakyList = animeListViewModel(flaky)
         try {
             runComposeUiTest {
                 setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, flakyList) }
@@ -467,7 +577,7 @@ class SessionRouteTest {
             },
             onAnimeListRequest = { requests += it },
         )
-        val filteredList = AnimeListViewModel(filtered)
+        val filteredList = animeListViewModel(filtered)
         try {
             runComposeUiTest {
                 setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, filteredList) }
@@ -538,7 +648,7 @@ class SessionRouteTest {
                 if (request.url.parameters["status"] != null) releaseFilteredPage.await()
             },
         )
-        val holdingList = AnimeListViewModel(holding)
+        val holdingList = animeListViewModel(holding)
         try {
             runComposeUiTest {
                 setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, holdingList) }
@@ -591,7 +701,7 @@ class SessionRouteTest {
             },
             onAnimeListRequest = { requests += it },
         )
-        val sortedList = AnimeListViewModel(sorted)
+        val sortedList = animeListViewModel(sorted)
         try {
             runComposeUiTest {
                 setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, sortedList) }
@@ -735,7 +845,7 @@ class SessionRouteTest {
     fun the_first_page_shows_a_skeleton_in_the_shape_of_the_list() {
         val releaseFirstPage = CompletableDeferred<Unit>()
         val holding = pagedRepository(holdAnimeList = { releaseFirstPage.await() })
-        val holdingList = AnimeListViewModel(holding)
+        val holdingList = animeListViewModel(holding)
         try {
             runComposeUiTest {
                 setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, holdingList) }
@@ -764,7 +874,7 @@ class SessionRouteTest {
     fun an_empty_anime_list_says_so_and_points_at_myanimelist() {
         val opened = mutableListOf<String>()
         val nothing = pagedRepository(animeListTitles = { emptyList() })
-        val nothingList = AnimeListViewModel(nothing)
+        val nothingList = animeListViewModel(nothing)
         try {
             runComposeUiTest {
                 setContent {
@@ -805,7 +915,7 @@ class SessionRouteTest {
                 if (url.parameters["status"] == "on_hold") emptyList() else (1..120).map { "Anime $it" }
             },
         )
-        val slicedList = AnimeListViewModel(sliced)
+        val slicedList = animeListViewModel(sliced)
         try {
             runComposeUiTest {
                 setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, slicedList) }
@@ -844,7 +954,7 @@ class SessionRouteTest {
     fun a_failed_first_page_is_an_error_with_a_retry_that_works() {
         var failing = true
         val flaky = pagedRepository(failAnimeListAt = { offset -> offset == 0 && failing })
-        val flakyList = AnimeListViewModel(flaky)
+        val flakyList = animeListViewModel(flaky)
         try {
             runComposeUiTest {
                 setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, flakyList) }
@@ -870,6 +980,28 @@ class SessionRouteTest {
             flaky.close()
         }
     }
+
+    /**
+     * Ends a hand-built ViewModel's `viewModelScope`, which is otherwise never ended.
+     *
+     * A ViewModel built by a test rather than by a `ViewModelStore` has nothing that will ever clear
+     * it, so its scope outlives the test with a page request still in it — to land after `tearDown`
+     * has closed the repository underneath it and reset the Main dispatcher. Through a
+     * `ViewModelStore` because `ViewModel.clear()` is `internal` and this is the public door to it.
+     */
+    private fun clear(viewModel: AnimeListViewModel) {
+        ViewModelStore().apply { put("animeList", viewModel) }.clear()
+    }
+
+    /**
+     * An [AnimeListViewModel] over this test's own store, so a Layout written by one survives into
+     * the next — which is what "remembered across a launch" means when there is no process to
+     * restart. [store] is a parameter so a test can hand it a store that has never been written to.
+     */
+    private fun animeListViewModel(
+        repository: MalSessionRepository,
+        store: JsonTokenStore = this.store,
+    ) = AnimeListViewModel(repository, store)
 
     /**
      * A repository over a MAL that holds 120 entries — more than two pages of 50, so paging has a

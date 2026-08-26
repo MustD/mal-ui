@@ -3,6 +3,8 @@ package io.challenge_workshop.mal_ui.auth
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -38,7 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.challenge_workshop.mal_ui.animelist.AnimeListFilters
-import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
+import io.challenge_workshop.mal_ui.animelist.AnimeListLayoutToggle
 import io.challenge_workshop.mal_ui.animelist.AnimeListSortMenu
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.animelist.LoadMoreWhenNearEnd
@@ -209,10 +211,14 @@ fun AuthorizingScreen(
  * index off, which is the one signal that means the same thing on all four Targets.
  *
  * **One `LazyVerticalGrid` for both Layouts.** The dense Layout is the same grid at one column, so
- * [layout] changes the column count and the width cap and nothing else — no second scroll state, no
- * second paging trigger, and no second copy of the five screen states. [layout] is a parameter with
- * the default this release ships; ticket 08 is what makes it a remembered choice, and it is already
- * a parameter so both Layouts are reachable from a test before then.
+ * the Layout changes the column count and the width cap and nothing else — no second scroll state,
+ * no second paging trigger, and no second copy of the five screen states.
+ *
+ * The Layout comes off [animeList] rather than being a parameter, because it is a remembered choice
+ * now: it is read from the store and written back there, and a parameter would be a second source of
+ * truth that the toggle could not write to. Switching it re-draws the entries already loaded and
+ * makes no request — which is why the toggle beside the filter row is not disabled while a page is
+ * in flight, and the other two controls are.
  *
  * **All of that chrome sits *above* the entries, and that is not a layout preference.** Anything
  * placed after them is unreachable on a real account: every scroll towards it enters the prefetch
@@ -225,16 +231,17 @@ fun AuthorizingScreen(
  * may be lost, because `SessionDebugPanel` is the only way a human ever sees the refresh path
  * execute.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SignedInScreen(
     state: SessionState.SignedIn,
     viewModel: MalSessionViewModel,
     animeList: AnimeListViewModel,
     modifier: Modifier = Modifier,
-    layout: AnimeListLayout = AnimeListLayout.Cards,
 ) {
     val gridState = rememberLazyGridState()
     val list = animeList.state.collectAsStateWithLifecycle().value
+    val layout = animeList.layout.collectAsStateWithLifecycle().value
     val contentWidth = Modifier.widthIn(max = layout.contentMaxWidth()).fillMaxWidth()
 
     // Not in the ViewModel's `init`: the pager must only ask MAL for a list once there is a
@@ -291,11 +298,28 @@ fun SignedInScreen(
                 enabled = !list.loadingFirstPage,
                 onSelect = animeList::setWatchStatus,
             )
-            AnimeListSortMenu(
-                selected = list.sortOrder,
-                enabled = !list.loadingFirstPage,
-                onSelect = animeList::setSortOrder,
-            )
+            // A `FlowRow` rather than a `Row`, and it is not a flourish: the Sort Order button
+            // names its direction in words ("Last updated (newest first)"), which with the toggle
+            // beside it is wider than a phone. A `Row` would clip one of the two off the edge with
+            // no way to reach it; this puts them side by side on a desktop and stacks them on a
+            // handset, with no size class and nothing to keep in step with the four Targets.
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                itemVerticalAlignment = Alignment.CenterVertically,
+            ) {
+                AnimeListSortMenu(
+                    selected = list.sortOrder,
+                    enabled = !list.loadingFirstPage,
+                    onSelect = animeList::setSortOrder,
+                )
+                // Beside the Sort Order rather than under it, and never disabled with it: the two
+                // controls to its left change *which* entries are on screen and have to wait for
+                // MAL, while this one re-draws the entries already loaded. Ticket 09 lifts it into
+                // the top app bar, which is where a control that is not a query belongs.
+                AnimeListLayoutToggle(selected = layout, onSelect = animeList::setLayout)
+            }
         }
         LazyVerticalGrid(
             // The Layout is entirely this: how many columns the entries get, and how wide the whole

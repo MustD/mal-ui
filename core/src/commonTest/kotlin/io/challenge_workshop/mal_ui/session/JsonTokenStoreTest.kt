@@ -1,5 +1,6 @@
 package io.challenge_workshop.mal_ui.session
 
+import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
 import io.challenge_workshop.mal_ui.mal.MalTokens
 import io.challenge_workshop.mal_ui.mal.MalUser
 import kotlinx.coroutines.test.runTest
@@ -157,6 +158,7 @@ class JsonTokenStoreTest {
         assertEquals("mal.session.v1", JsonTokenStore.SESSION_KEY)
         assertEquals("mal.pending.v1", JsonTokenStore.PENDING_KEY)
         assertEquals("mal.clientId.v1", JsonTokenStore.CLIENT_ID_KEY)
+        assertEquals("mal.layout.v1", JsonTokenStore.LAYOUT_KEY)
     }
 
     @Test
@@ -204,6 +206,7 @@ class JsonTokenStoreTest {
         store.writeSession(TOKENS, USER)
         store.writePending("v", "s", "r", "c")
         store.writeClientId("a-client-id")
+        store.writeLayout(AnimeListLayout.List)
 
         assertTrue(kv.entries.keys.all { it.endsWith(".v1") }, "keys were ${kv.entries.keys}")
     }
@@ -262,5 +265,53 @@ class JsonTokenStoreTest {
         // The Client ID identifies the *app*, not the user: signing out, or a rejected refresh,
         // must not make the next sign-in a retyping exercise.
         assertEquals("a-client-id", store.readClientId())
+    }
+
+    @Test
+    fun a_layout_round_trips_unchanged() = runTest {
+        val store = store(FakeKeyValueStore())
+
+        store.writeLayout(AnimeListLayout.List)
+
+        assertEquals(AnimeListLayout.List, store.readLayout())
+    }
+
+    @Test
+    fun a_missing_layout_record_reads_as_the_default() = runTest {
+        // A first launch has no record, and a Layout is a preference rather than a credential:
+        // there is nothing to fail about, so the answer is the Layout the app ships with.
+        assertEquals(AnimeListLayout.Cards, store(FakeKeyValueStore()).readLayout())
+    }
+
+    @Test
+    fun a_corrupt_layout_blob_reads_as_the_default_and_is_removed() = runTest {
+        val kv = FakeKeyValueStore(mutableMapOf(JsonTokenStore.LAYOUT_KEY to "{not json"))
+        val store = store(kv)
+
+        assertEquals(AnimeListLayout.Cards, store.readLayout())
+        assertTrue(JsonTokenStore.LAYOUT_KEY !in kv.entries)
+    }
+
+    @Test
+    fun a_layout_this_build_does_not_know_reads_as_the_default() = runTest {
+        // A record written by a later build that offers a third Layout. An unknown enum value is a
+        // `SerializationException`, and a preference is never worth a crash loop over.
+        val kv = FakeKeyValueStore(mutableMapOf(JsonTokenStore.LAYOUT_KEY to "\"Mosaic\""))
+
+        assertEquals(AnimeListLayout.Cards, store(kv).readLayout())
+    }
+
+    @Test
+    fun clear_keeps_the_layout() = runTest {
+        val store = store(FakeKeyValueStore())
+        store.writeSession(TOKENS, USER)
+        store.writeLayout(AnimeListLayout.List)
+
+        store.clear()
+
+        // The same rule as the Client ID: a Layout is a device preference, not a credential, so
+        // signing out must not reset how the next user of this device reads their list.
+        assertNull(store.readSession())
+        assertEquals(AnimeListLayout.List, store.readLayout())
     }
 }

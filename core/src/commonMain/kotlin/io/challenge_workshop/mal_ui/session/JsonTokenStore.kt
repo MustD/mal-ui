@@ -1,12 +1,14 @@
 package io.challenge_workshop.mal_ui.session
 
+import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
 import io.challenge_workshop.mal_ui.mal.MalTokens
 import io.challenge_workshop.mal_ui.mal.MalUser
 import kotlinx.serialization.json.Json
 import kotlin.time.Clock
 
 /**
- * The Session and the Pending Authorization, as JSON in a [KeyValueStore].
+ * The Session, the Pending Authorization and the two device preferences, as JSON in a
+ * [KeyValueStore].
  *
  * Two policies live here rather than in callers:
  *
@@ -14,7 +16,8 @@ import kotlin.time.Clock
  *    deserialization crash loop, because the new key is simply absent.
  *  - **A corrupt value reads as absent, and is deleted.** Throwing would give a crash loop
  *    that no amount of restarting escapes; leaving the bad value would re-read it on every
- *    launch. Both records are recoverable by signing in again, so discarding is safe.
+ *    launch. Discarding is safe for every record here: the two about the user are recoverable
+ *    by signing in again, and the two preferences fall back to a default the user can re-pick.
  *
  * [clock] is injected, and stamps [StoredSession.obtainedAtEpochMs] /
  * [PendingAuthorization.startedAtEpochMs] here rather than at call sites, so no caller can
@@ -29,6 +32,7 @@ class JsonTokenStore(
         const val SESSION_KEY: String = "mal.session.v1"
         const val PENDING_KEY: String = "mal.pending.v1"
         const val CLIENT_ID_KEY: String = "mal.clientId.v1"
+        const val LAYOUT_KEY: String = "mal.layout.v1"
     }
 
     suspend fun readSession(): StoredSession? = readOrDiscard(SESSION_KEY)
@@ -104,10 +108,28 @@ class JsonTokenStore(
     }
 
     /**
+     * How the user last chose to read their Anime List, or [AnimeListLayout.Cards] if they never
+     * have on this device.
+     *
+     * **Never null and never an error.** Absent, corrupt, or a Layout a later build wrote that this
+     * one has no name for all give the default: a preference is not worth a failed read for a
+     * caller to handle, let alone the crash loop an unknown enum value would otherwise be.
+     */
+    suspend fun readLayout(): AnimeListLayout =
+        readOrDiscard<AnimeListLayout>(LAYOUT_KEY) ?: AnimeListLayout.Cards
+
+    /** Writes the Layout. Presentation only — nothing here is ever sent to MAL. */
+    suspend fun writeLayout(layout: AnimeListLayout) {
+        write(LAYOUT_KEY, layout)
+    }
+
+    /**
      * Everything this store owns **about the user**. Used when a refresh is rejected and on sign-out.
      *
      * Deliberately not the Client ID: that identifies the *app*, not the user, so a sign-out that
-     * dropped it would turn the next sign-in into a retyping exercise.
+     * dropped it would turn the next sign-in into a retyping exercise. Deliberately not the Layout
+     * either, on the same terms: it is a device preference, and one that reset on every sign-out
+     * would be a choice the user has to make again for no reason they can see.
      */
     suspend fun clear() {
         clearSession()

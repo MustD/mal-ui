@@ -86,7 +86,7 @@ internal fun AnimeListCard(entry: AnimeListEntry, modifier: Modifier = Modifier)
  * spec asks every List Entry to carry.
  *
  * Kept as the *other* Layout rather than replaced: a card grid is for browsing and a list is for
- * scanning four hundred completed shows, and ticket 08 is what lets a person pick.
+ * scanning four hundred completed shows, and the Layout toggle is what lets a person pick.
  */
 @Composable
 internal fun AnimeListRow(entry: AnimeListEntry, modifier: Modifier = Modifier) {

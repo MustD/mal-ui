@@ -30,9 +30,17 @@ out the closest candidates.
 - Desktop writes a `0600` file under `$XDG_STATE_HOME`. The interface is deliberately narrow enough that an OS-keychain
   implementation can be swapped in later without touching a caller.
 - Keys are versioned (`mal.session.v1`), so a format change is a clean re-login rather than a crash loop. The store
-  holds three such records, not one: the Session, the Pending Authorization, and — since ticket 17 — the Client ID
-  (`mal.clientId.v1`). `JsonTokenStore.clear()` deliberately drops the first two and **keeps** the third: the Client ID
-  identifies the app rather than the user, so signing out must not turn the next sign-in into a retyping exercise.
+  holds four such records, not one: the Session, the Pending Authorization, the Client ID (`mal.clientId.v1`, ticket 17)
+  and the Anime List's Layout (`mal.layout.v1`, ticket 08). `JsonTokenStore.clear()` deliberately drops the first two
+  and **keeps** the last two: the Client ID identifies the app rather than the user, and the Layout is a device
+  preference, so signing out must not turn the next sign-in into a retyping exercise or reset how the list is drawn.
+  The two preferences also differ from the two credentials in how a bad value reads — absent, corrupt or unknown gives
+  the default Layout rather than a failure, because a preference is never worth a crash loop. **On the web targets they
+  are not durable**, and that is this ADR's `sessionStorage` choice reaching a record it was not argued for: a Layout
+  survives a reload there and not a closed tab. Deliberately not split — a preference kept somewhere the Session is not
+  would be a second persistence rule to keep in step across four targets, for a record whose worst failure is a first
+  screen in the shipped default. [ADR-0001](0001-refresh-token-in-web-session-storage.md) is where that would be
+  reopened.
 - Web is `sessionStorage` — see [ADR-0001](0001-refresh-token-in-web-session-storage.md).
 - The cost is four small implementations to maintain and test ourselves. The benefit is no dependency that can go stale
   underneath a four-target build, which is what happened to every library above.

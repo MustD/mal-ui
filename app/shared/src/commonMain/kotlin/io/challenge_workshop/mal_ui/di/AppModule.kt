@@ -55,8 +55,9 @@ val appModule: Module = module {
     viewModel { MalSessionViewModel(repository = get(), startupRedirect = get()) }
 
     // Also a `viewModel`, and it takes the repository rather than a client of its own: the pager it
-    // builds must ride the one authenticated `HttpClient` that owns refresh.
-    viewModel { AnimeListViewModel(repository = get()) }
+    // builds must ride the one authenticated `HttpClient` that owns refresh. The store is the same
+    // singleton the repository writes the Session to — the Layout is its fourth record.
+    viewModel { AnimeListViewModel(repository = get(), store = get()) }
 }
 
 /**

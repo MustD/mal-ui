@@ -46,7 +46,7 @@ import kotlinx.coroutines.flow.first
  * **A grid for both Layouts, not a grid and a list.** The dense Layout is the same grid at one
  * column. Two lazy layouts would mean two scroll states, two paging triggers and two sets of the
  * five screen states below, and switching Layout would drop the user's scroll position on the floor
- * — which is what ticket 08's toggle would then have to be forgiven for.
+ * — which is what the Layout toggle would then have to be forgiven for, on every tap.
  *
  * Everything this screen can be *other* than a list of entries is here: the skeleton, the two empty
  * states, and the two failures, each read off `AnimeListPager`'s own fields.

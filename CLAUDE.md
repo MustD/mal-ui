@@ -166,9 +166,11 @@ time is exactly the trap the Conventions section warns about.
 `appModule` is the only place that reads `MAL_CLIENT_ID`. `:core` keeps `MalAuthConfig.clientId` a required parameter on
 purpose, so `:core`'s own tests cannot pick up whatever the developer's machine was configured with.
 
-The remembered value is `JsonTokenStore`'s third record (`mal.clientId.v1`), and `JsonTokenStore.clear()` deliberately
-does **not** drop it: the Client ID identifies the app, not the user, so signing out must not turn the next sign-in into
-a retyping exercise. It is written when a sign-in actually starts (`beginAuthorization`), not on every keystroke.
+The remembered value is one of `JsonTokenStore`'s two preference records (`mal.clientId.v1`; the other is the Anime
+List's Layout, `mal.layout.v1`), and `JsonTokenStore.clear()` does **not** drop either: the Client ID identifies the
+app, not the user, so signing out must not turn the next sign-in into a retyping exercise. It is written when a
+sign-in actually starts (`beginAuthorization`), not on every keystroke. Neither preference is durable on the web
+targets, where the store is `sessionStorage` and goes with the tab.
 
 ## Architecture
 
