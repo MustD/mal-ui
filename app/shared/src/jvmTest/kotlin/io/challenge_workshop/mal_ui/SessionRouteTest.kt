@@ -4,6 +4,9 @@ package io.challenge_workshop.mal_ui
 
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalUriHandler
@@ -13,47 +16,58 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.hasTestTag
-import androidx.compose.ui.test.onChildren
-import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onChildren
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.height
+import androidx.lifecycle.ViewModelStore
 import io.challenge_workshop.mal_ui.animelist.ANIME_LIST_SORT_ORDERS
 import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
-import androidx.lifecycle.ViewModelStore
+import io.challenge_workshop.mal_ui.animelist.AnimeListSortOrder
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.animelist.MY_ANIME_LIST_URL
+import io.challenge_workshop.mal_ui.animelist.WatchStatus
 import io.challenge_workshop.mal_ui.animelist.sortLabel
-import io.challenge_workshop.mal_ui.auth.ANIME_LIST_LAYOUT_TAG
-import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListener
-import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListenerTest
-import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
-import io.challenge_workshop.mal_ui.auth.StartupRedirect
-import io.challenge_workshop.mal_ui.auth.awaitLoopbackPortFree
-import io.challenge_workshop.mal_ui.auth.SIGNED_OUT_REASON_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_EMPTY_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_ERROR_TAG
+import io.challenge_workshop.mal_ui.auth.ANIME_LIST_FILTERS_TAG
+import io.challenge_workshop.mal_ui.auth.ANIME_LIST_LAYOUT_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_MORE_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_SKELETON_TAG
-import io.challenge_workshop.mal_ui.auth.ANIME_LIST_FILTERS_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_SORT_MENU_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_SORT_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_TAG
 import io.challenge_workshop.mal_ui.auth.FAKE_MAL_ANIME_TITLES
+import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListener
+import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListenerTest
+import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
+import io.challenge_workshop.mal_ui.auth.SESSION_DIAGNOSTICS_TAG
+import io.challenge_workshop.mal_ui.auth.SESSION_MENU_BUTTON_TAG
+import io.challenge_workshop.mal_ui.auth.SESSION_MENU_TAG
+import io.challenge_workshop.mal_ui.auth.SESSION_TOP_BAR_TAG
+import io.challenge_workshop.mal_ui.auth.SESSION_USER_NAME_TAG
+import io.challenge_workshop.mal_ui.auth.SIGNED_OUT_REASON_TAG
 import io.challenge_workshop.mal_ui.auth.SessionScreenTag
+import io.challenge_workshop.mal_ui.auth.StartupRedirect
+import io.challenge_workshop.mal_ui.auth.awaitLoopbackPortFree
 import io.challenge_workshop.mal_ui.auth.fakeMal
 import io.challenge_workshop.mal_ui.mal.DESKTOP_LOOPBACK_PORT
 import io.challenge_workshop.mal_ui.mal.DESKTOP_REDIRECT_URI
@@ -68,17 +82,17 @@ import io.challenge_workshop.mal_ui.session.SessionState
 import io.challenge_workshop.mal_ui.session.SignedOutReason
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.Url
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.resetMain
-import kotlinx.coroutines.test.setMain
 import java.util.Collections
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
 
 /**
  * The routing `when` in [App], rendered for real.
@@ -771,37 +785,183 @@ class SessionRouteTest {
     }
 
     /**
-     * The Anime List taking over the signed-in screen must not cost the two things that were on it.
-     * Ticket 09 rehouses both into a top app bar; until then they are simply still here, and this is
-     * what says so.
+     * The Anime List taking over the signed-in screen must not cost the things that were on it.
+     * Ticket 09 rehouses them into the top app bar's overflow menu, which is this.
+     *
+     * Asserted on the open menu rather than on the screen, because that is now the only place any of
+     * them can be — a "Sign out" that were still lying loose on the screen would pass an assertion
+     * over the whole tree and mean the rehousing never happened.
      */
     @Test
-    fun sign_out_and_the_debug_panel_survive_the_anime_list_arriving() {
+    fun the_overflow_menu_carries_reload_sign_out_and_session_diagnostics() {
         runComposeUiTest {
             setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
 
             waitUntil("the first page lands", WAIT_MS) { animeList.state.value.loaded }
 
-            onNodeWithText("Sign out").assertIsDisplayed()
-            onNodeWithText("Session diagnostics").assertIsDisplayed()
+            // One list, so the count asserted below is the count of the entries named above it
+            // rather than a number that can drift away from them.
+            val entries = listOf("Reload", "Sign out", "Session diagnostics")
+
+            // None of the three is on the screen itself: they live behind one button.
+            for (entry in entries) {
+                onNodeWithText(entry).assertDoesNotExist()
+            }
+
+            onNodeWithTag(SESSION_TOP_BAR_TAG).assertIsDisplayed()
+            onNodeWithTag(SESSION_MENU_BUTTON_TAG).performClick()
+            waitForIdle()
+
+            for (entry in entries) {
+                onNodeWithText(entry).assertIsDisplayed()
+            }
+            assertEquals(
+                entries.size,
+                onNodeWithTag(SESSION_MENU_TAG).onChildren().fetchSemanticsNodes().size,
+                "a fourth entry is something the Anime List did not displace, so it belongs on the " +
+                    "screen where the user can see it rather than behind a menu",
+            )
         }
     }
 
+    /**
+     * The top app bar's whole job besides the menu: say who is signed in.
+     *
+     * Measured rather than read, because truncation is not in the semantics tree — an ellipsised
+     * name and a wrapped one both read back as the same string, and a bar that wrapped a long name
+     * would push the list down by however many lines the name happened to need. So the assertion is
+     * that a name nobody could fit takes exactly the height a short one does.
+     */
     @Test
-    fun the_debug_panel_starts_collapsed() {
+    fun the_top_app_bar_names_the_user_and_truncates_rather_than_wrapping() {
+        fun heightOf(name: String): Dp {
+            var height = 0.dp
+            runComposeUiTest {
+                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, name)), viewModel, animeList) }
+                waitForIdle()
+                onNodeWithTag(SESSION_USER_NAME_TAG).assertTextContains(name.take(1), substring = true)
+                height = onNodeWithTag(SESSION_USER_NAME_TAG).getBoundsInRoot().height
+            }
+            return height
+        }
+
+        val long = "someone-with-a-name-far-too-long-to-fit-in-a-top-app-bar-".repeat(4)
+
+        assertEquals(
+            heightOf("someone"),
+            heightOf(long),
+            "a long name wrapped instead of truncating, so the bar grows with whatever MAL returns",
+        )
+    }
+
+    /**
+     * A Session refresh is not a navigation. `SessionState.SignedIn` carries `refreshing` precisely
+     * so the screen can say so without being swapped out, and a list that unmounted for it would
+     * lose every page the user has scrolled through.
+     */
+    @Test
+    fun a_session_refresh_does_not_blank_the_signed_in_screen() {
+        runComposeUiTest {
+            var refreshing by mutableStateOf(false)
+            setContent {
+                SessionRoute(SessionState.SignedIn(MalUser(1, "someone"), refreshing), viewModel, animeList)
+            }
+            waitUntil("the first page lands", WAIT_MS) { animeList.state.value.loaded }
+            onNodeWithText(FAKE_MAL_ANIME_TITLES.first()).assertIsDisplayed()
+
+            refreshing = true
+            waitForIdle()
+
+            onNodeWithTag(ANIME_LIST_TAG).assertIsDisplayed()
+            onNodeWithText(FAKE_MAL_ANIME_TITLES.first()).assertIsDisplayed()
+            onNodeWithTag(SESSION_USER_NAME_TAG).assertIsDisplayed()
+        }
+    }
+
+    /**
+     * Reload is the way to pick up a change made on myanimelist.net, so it has to be a refetch of
+     * the list the user is actually looking at — not of the default one. The filter and the Sort
+     * Order are both moved off their defaults first, because a Reload that quietly dropped either
+     * would look identical to a working one on a screen that had never been touched.
+     */
+    @Test
+    fun reload_refetches_the_first_page_with_the_current_filter_and_sort_order() {
+        val requests = Collections.synchronizedList(mutableListOf<Url>())
+        val reloading = pagedRepository(onAnimeListRequest = { requests += it })
+        val reloadingList = animeListViewModel(reloading)
+        try {
+            runComposeUiTest {
+                setContent {
+                    SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, reloadingList)
+                }
+                waitUntil("the first page lands", WAIT_MS) { reloadingList.state.value.entries.size == 50 }
+
+                onNodeWithText("Watching").performClick()
+                waitUntil("the filtered page lands", WAIT_MS) {
+                    reloadingList.state.value.watchStatus == WatchStatus.Watching &&
+                        !reloadingList.state.value.loadingFirstPage
+                }
+                onNodeWithTag(ANIME_LIST_SORT_TAG).performClick()
+                onNodeWithText("Title (A–Z)").performClick()
+                waitUntil("the re-ordered page lands", WAIT_MS) {
+                    reloadingList.state.value.sortOrder == AnimeListSortOrder.Title &&
+                        !reloadingList.state.value.loadingFirstPage
+                }
+                // Two pages deep, so a Reload that started from where the scroll left off rather
+                // than from `offset=0` would show up in the request below.
+                scrollToLastLoadedEntry(reloadingList)
+                waitUntil("a second page lands", WAIT_MS) { reloadingList.state.value.entries.size == 100 }
+                requests.clear()
+
+                onNodeWithTag(SESSION_MENU_BUTTON_TAG).performClick()
+                onNodeWithText("Reload").performClick()
+
+                waitUntil("the reloaded first page lands", WAIT_MS) {
+                    reloadingList.state.value.entries.size == 50
+                }
+                assertEquals(
+                    listOf(Triple("watching", "anime_title", "0")),
+                    requests.map {
+                        Triple(it.parameters["status"], it.parameters["sort"], it.parameters["offset"])
+                    },
+                    "Reload must refetch the list on screen from its start, and ask for it once",
+                )
+            }
+        } finally {
+            reloading.close()
+        }
+    }
+
+    /**
+     * `SessionDebugPanel` is a real tool rather than scaffolding — it is the only way a human ever
+     * sees the refresh path execute — so rehousing it must not cost any of its controls. The dialog
+     * is where it went; the menu entry is its disclosure now, in place of the panel's own.
+     */
+    @Test
+    fun session_diagnostics_opens_the_debug_panel_in_a_dialog() {
         runComposeUiTest {
             setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
-            // The Anime List loads asynchronously above the panel. Clicking before it lands aims at
-            // where the panel *was*, and the list then pushes it out from under the click.
             waitUntil("the Anime List settles", WAIT_MS) { animeList.state.value.loaded }
 
-            onNodeWithText("Session diagnostics").assertIsDisplayed()
             // "Force 401" writes an invalid token into the store, so it must not be a stray tap away.
             onNodeWithText("Force 401").assertDoesNotExist()
 
-            onNodeWithText("Session diagnostics").performClick()
+            openDiagnostics()
 
-            onNodeWithText("Force 401").assertIsDisplayed()
+            onNodeWithTag(SESSION_DIAGNOSTICS_TAG).assertIsDisplayed()
+            for (control in listOf("Force 401", "Reload diagnostics", "Reload profile", "Close")) {
+                onNodeWithText(control).assertIsDisplayed()
+            }
+            // The other half of the profile row that was on this screen. The name is in the bar;
+            // the MAL id is the half nobody reads until something is wrong, which is a diagnostic.
+            onNodeWithText("MAL id 1", substring = true).assertIsDisplayed()
+            // The screen is still underneath it: a dialog is not a third destination.
+            onNodeWithTag(ANIME_LIST_TAG).assertIsDisplayed()
+
+            onNodeWithText("Close").performClick()
+            waitForIdle()
+
+            onNodeWithText("Force 401").assertDoesNotExist()
         }
     }
 
@@ -820,7 +980,7 @@ class SessionRouteTest {
             )
             setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
             waitUntil("the Anime List settles", WAIT_MS) { animeList.state.value.loaded }
-            onNodeWithText("Session diagnostics").performClick()
+            openDiagnostics()
 
             onNodeWithText("Force 401").performClick()
 
@@ -994,6 +1154,18 @@ class SessionRouteTest {
     }
 
     /**
+     * Opens the diagnostics dialog the way a person does: the overflow menu, then its last entry.
+     *
+     * The menu closes on the way, which is what keeps "Session diagnostics" unambiguous — the menu
+     * entry and the dialog's own title share those words and are never on screen at once.
+     */
+    private fun ComposeUiTest.openDiagnostics() {
+        onNodeWithTag(SESSION_MENU_BUTTON_TAG).performClick()
+        onNodeWithText("Session diagnostics").performClick()
+        waitForIdle()
+    }
+
+    /**
      * An [AnimeListViewModel] over this test's own store, so a Layout written by one survives into
      * the next — which is what "remembered across a launch" means when there is no process to
      * restart. [store] is a parameter so a test can hand it a store that has never been written to.
@@ -1033,8 +1205,9 @@ class SessionRouteTest {
      *
      * By index rather than by text, because the trigger is about *position in the layout* and a
      * `performScrollToNode` would stop as soon as the node was composed rather than at the end.
-     * The lazy list holds two chrome items above the entries and one below, so the entry count is
-     * always a valid index inside it and always within a screenful of the bottom.
+     * The lazy list holds one chrome item above the entries and one below — the rest of the chrome
+     * is in the top app bar now — so the entry count is always a valid index inside it and always
+     * within a screenful of the bottom.
      */
     private fun ComposeUiTest.scrollToLastLoadedEntry(animeList: AnimeListViewModel) {
         onNodeWithTag(ANIME_LIST_TAG).performScrollToIndex(animeList.state.value.entries.size)

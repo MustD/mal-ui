@@ -99,6 +99,23 @@ class AnimeListViewModel(
     }
 
     /**
+     * Refetches the Anime List from `offset=0`, keeping the filter and the Sort Order on screen.
+     *
+     * The way to pick up a change made on myanimelist.net, so it has to be the list the user is
+     * *looking at* rather than the default one — which is exactly [AnimeListPager.reset] with
+     * neither of its arguments given. There is deliberately no second version of that behaviour: the
+     * old entries stay observable until the replacement lands and the screen scrolls back to the
+     * top, on the same terms as a chip tap.
+     *
+     * Unguarded, unlike [setWatchStatus] and [setSortOrder], which drop a re-pick of what is already
+     * on screen. Re-picking a filter is not a request for anything; this is a request for exactly
+     * that, and dropping it would make the menu entry do nothing on the one screen it exists for.
+     */
+    fun reload() {
+        viewModelScope.launch { pager.reset() }
+    }
+
+    /**
      * Filters the Anime List to one Watch Status, or to the whole list for null.
      *
      * Filtering is MAL's job: the list is paged, so it is never wholly in memory, so this discards

@@ -88,6 +88,14 @@ _Avoid_: Sorting, order by
 Which shape the Anime List is drawn in — cards or list. A presentation choice that changes no data and no query.
 _Avoid_: View, mode (a "view" in a Compose codebase is an Android widget)
 
+**Reload**:
+Discarding every loaded page of the Anime List and fetching it again from the start under the filter and Sort Order
+already on screen — the way to pick up a change made on myanimelist.net. The same operation a filter or Sort Order
+change performs, with neither of them changed. Unqualified "Reload" always means this one; the session debug panel's
+two buttons are **Reload diagnostics** and **Reload profile**, which reload a Session and not a list. _Avoid_: Refresh
+(a **Session** refresh is the token exchange, and the two happen on the same screen), retry (a retry re-requests the one
+page that failed and keeps everything else)
+
 ### Platform
 
 **Relay**:

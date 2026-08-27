@@ -23,12 +23,15 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -40,12 +43,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.challenge_workshop.mal_ui.animelist.AnimeListFilters
-import io.challenge_workshop.mal_ui.animelist.AnimeListLayoutToggle
 import io.challenge_workshop.mal_ui.animelist.AnimeListSortMenu
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.animelist.LoadMoreWhenNearEnd
 import io.challenge_workshop.mal_ui.animelist.animeListItems
-import io.challenge_workshop.mal_ui.animelist.fullLineSpan
 import io.challenge_workshop.mal_ui.animelist.contentMaxWidth
 import io.challenge_workshop.mal_ui.animelist.gridCells
 import io.challenge_workshop.mal_ui.session.SessionState
@@ -226,10 +227,10 @@ fun AuthorizingScreen(
  * list has been paged in. Above the entries it is always one scroll up, and scrolling up never
  * fetches anything.
  *
- * The profile row and the debug panel are therefore both up there. Ticket 09 rehouses them into a
- * top app bar and an overflow menu — which is where they are heading anyway; until it does, neither
- * may be lost, because `SessionDebugPanel` is the only way a human ever sees the refresh path
- * execute.
+ * Everything that is *not* a query over the list has left the list entirely: the name, the Layout
+ * toggle, Reload, Sign out and the debug panel are in [SignedInTopBar], which neither scrolls nor
+ * competes with the entries. The filter row and the Sort Order stay between the bar and the list,
+ * because those two are the query.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -240,6 +241,9 @@ fun SignedInScreen(
     modifier: Modifier = Modifier,
 ) {
     val gridState = rememberLazyGridState()
+    // Whether the diagnostics dialog is over the screen. A dialog, not a destination — see
+    // [SESSION_DIAGNOSTICS_TAG].
+    var diagnosticsOpen by remember { mutableStateOf(false) }
     val list = animeList.state.collectAsStateWithLifecycle().value
     val layout = animeList.layout.collectAsStateWithLifecycle().value
     val contentWidth = Modifier.widthIn(max = layout.contentMaxWidth()).fillMaxWidth()
@@ -281,9 +285,18 @@ fun SignedInScreen(
         modifier = modifier.fillMaxSize().safeContentPadding(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        SignedInTopBar(
+            state = state,
+            viewModel = viewModel,
+            animeList = animeList,
+            // The one thing the bar cannot read off `animeList` itself: the Layout is already
+            // collected here, for the grid's column count and its width cap.
+            layout = layout,
+            onShowDiagnostics = { diagnosticsOpen = true },
+            modifier = Modifier.fillMaxWidth(),
+        )
         // Outside the lazy grid, so both controls stay put while the list scrolls under them.
-        // Ticket 09 puts the top app bar above them; until then they are simply the top of the
-        // screen. `contentWidth` is the grid's own cap, so they line up with the entries they act on
+        // `contentWidth` is the grid's own cap, so they line up with the entries they act on
         // rather than running the full width of a desktop window — and so the dense Layout's
         // narrower list does not leave its filter row floating out over empty surface.
         // The padding goes *outside* the width cap, not inside it: padding applied after it would
@@ -298,11 +311,11 @@ fun SignedInScreen(
                 enabled = !list.loadingFirstPage,
                 onSelect = animeList::setWatchStatus,
             )
-            // A `FlowRow` rather than a `Row`, and it is not a flourish: the Sort Order button
-            // names its direction in words ("Last updated (newest first)"), which with the toggle
-            // beside it is wider than a phone. A `Row` would clip one of the two off the edge with
-            // no way to reach it; this puts them side by side on a desktop and stacks them on a
-            // handset, with no size class and nothing to keep in step with the four Targets.
+            // Still a `FlowRow` with one child in it, now that the Layout toggle has gone to the
+            // top app bar: the Sort Order button names its direction in words ("Last updated
+            // (newest first)"), which is wider than a narrow phone, and a `FlowRow` is what lets it
+            // take the line it needs rather than being clipped off the edge — with no size class
+            // and nothing to keep in step with the four Targets.
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -314,12 +327,12 @@ fun SignedInScreen(
                     enabled = !list.loadingFirstPage,
                     onSelect = animeList::setSortOrder,
                 )
-                // Beside the Sort Order rather than under it, and never disabled with it: the two
-                // controls to its left change *which* entries are on screen and have to wait for
-                // MAL, while this one re-draws the entries already loaded. Ticket 09 lifts it into
-                // the top app bar, which is where a control that is not a query belongs.
-                AnimeListLayoutToggle(selected = layout, onSelect = animeList::setLayout)
             }
+            // Above the list rather than at the bottom of it, so a failed sign-out, Reload or
+            // profile reload is visible from where the user actually is — and outside the grid, so
+            // it does not scroll away from the controls that caused it. Under the `FlowRow` rather
+            // than in it: it is a card the width of the pane, not a control to lay out beside one.
+            viewModel.error?.let { ErrorCard("Something went wrong", it) }
         }
         LazyVerticalGrid(
             // The Layout is entirely this: how many columns the entries get, and how wide the whole
@@ -337,46 +350,6 @@ fun SignedInScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item(span = fullLineSpan) {
-                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                state.user?.name ?: "Signed in",
-                                style = MaterialTheme.typography.headlineSmall,
-                                overflow = TextOverflow.Ellipsis,
-                                maxLines = 1,
-                            )
-                            state.user?.let {
-                                Text(
-                                    "MAL id ${it.id}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                        // A refresh must not unmount this screen, so it shows as a spinner beside
-                        // the name.
-                        if (state.refreshing) CircularProgressIndicator(Modifier.padding(4.dp))
-                        TextButton(onClick = viewModel::signOut, enabled = !viewModel.busy) {
-                            Text("Sign out")
-                        }
-                    }
-                    OutlinedButton(onClick = viewModel::refreshUser, enabled = !viewModel.busy) {
-                        Text("Reload profile")
-                    }
-                    // Above the list rather than at the bottom of it, so a failed sign-out or
-                    // profile reload is visible from where the user actually is.
-                    viewModel.error?.let { ErrorCard("Something went wrong", it) }
-                    SessionDebugPanel(viewModel)
-                    HorizontalDivider()
-                }
-            }
-
             animeListItems(
                 state = list,
                 layout = layout,
@@ -385,6 +358,10 @@ fun SignedInScreen(
                 // reset — an empty slice's way out must not become a second way of changing filter.
                 onShowAll = { animeList.setWatchStatus(null) },
             )
+        }
+
+        if (diagnosticsOpen) {
+            SessionDiagnosticsDialog(state, viewModel, onDismiss = { diagnosticsOpen = false })
         }
     }
 }

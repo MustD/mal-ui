@@ -119,3 +119,52 @@ val ANIME_LIST_SORT_MENU_TAG: String = "$ANIME_LIST_SORT_TAG.menu"
  * `AnimeListViewModel.layout`.)
  */
 val ANIME_LIST_LAYOUT_TAG: String = "${SessionScreenTag.SignedIn.tag}.layout"
+
+/**
+ * The top app bar over the signed-in screen — the chrome that carries the user's name, the Layout
+ * toggle and the overflow menu.
+ *
+ * Derived from [SessionScreenTag.SignedIn] like the Anime List's own tags, because it is part of the
+ * same screen: the signed-in branch **is** the Anime List, and the bar is what stops that costing
+ * the profile row and the debug panel.
+ */
+val SESSION_TOP_BAR_TAG: String = "${SessionScreenTag.SignedIn.tag}.topBar"
+
+/**
+ * The user's name in the top app bar.
+ *
+ * Its own tag because the thing worth asserting about it is its *shape* rather than its text: a name
+ * has no length limit and this bar has one line, so a test measures the node and compares it against
+ * a short name's. Truncation is not in the semantics tree — a wrapped name and an ellipsised one
+ * both read back as the same string — so there is nothing else to ask.
+ */
+val SESSION_USER_NAME_TAG: String = "$SESSION_TOP_BAR_TAG.userName"
+
+/**
+ * The button that opens the overflow menu.
+ *
+ * Its own tag because the menu is only reachable through it: the three entries do not exist in the
+ * tree until it is clicked, so a test that could not find the button could not assert on any of
+ * them. By tag and not by its label, because the label is the one part of it with no meaning — it
+ * says "More" only because this project pulls in no Material icon dependency to draw three dots
+ * with.
+ */
+val SESSION_MENU_BUTTON_TAG: String = "$SESSION_TOP_BAR_TAG.moreButton"
+
+/**
+ * The overflow menu itself, once opened: Reload, Sign out, Session diagnostics.
+ *
+ * Its own tag for the reason [ANIME_LIST_SORT_MENU_TAG] has one — what is worth asserting is *what
+ * is in it*, and the three entries in it are the three things the Anime List taking over this screen
+ * could otherwise have cost.
+ */
+val SESSION_MENU_TAG: String = "$SESSION_TOP_BAR_TAG.menu"
+
+/**
+ * The dialog the Session diagnostics menu entry opens, holding [SessionDebugPanel].
+ *
+ * **Not a third destination.** `App.kt`'s `when` over `SessionState` stays a four-branch switch and
+ * no navigation library is added — a dialog is drawn over the signed-in screen, which is still the
+ * screen underneath it.
+ */
+val SESSION_DIAGNOSTICS_TAG: String = "${SessionScreenTag.SignedIn.tag}.diagnostics"

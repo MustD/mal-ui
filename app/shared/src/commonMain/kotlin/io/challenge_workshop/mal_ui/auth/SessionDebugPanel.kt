@@ -2,23 +2,19 @@ package io.challenge_workshop.mal_ui.auth
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.challenge_workshop.mal_ui.getPlatform
 
 /**
- * Collapsed diagnostics for the signed-in state.
+ * Diagnostics for the signed-in state.
  *
  * Everything in here answers a question that is otherwise unanswerable from inside a running build: a
  * misrouted web build silently talks to the wrong host, a Redirect URI mismatch reports as a 401 about
@@ -26,18 +22,16 @@ import io.challenge_workshop.mal_ui.getPlatform
  *
  * **No token value ever appears here.** [io.challenge_workshop.mal_ui.session.SessionDiagnostics] has
  * no field that could carry one, so that stays true however this panel is edited later.
+ *
+ * It no longer carries its own expand/collapse. It is opened from the top app bar's overflow menu
+ * into [SessionDiagnosticsDialog], and that menu entry is the disclosure — a dialog opening onto a
+ * collapsed panel would be two taps to say one thing. "Force 401" is still behind that one tap,
+ * which is what keeps it off the screen a stray finger is on.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SessionDebugPanel(viewModel: MalSessionViewModel, modifier: Modifier = Modifier) {
-    var expanded by remember { mutableStateOf(false) }
-
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextButton(onClick = { expanded = !expanded }) {
-            Text(if (expanded) "Hide session diagnostics" else "Session diagnostics")
-        }
-
-        if (!expanded) return@Column
-
         LabelledValue("Target", getPlatform().name)
         LabelledValue("Token endpoint", viewModel.endpoints.tokenEndpoint)
         LabelledValue("API base", viewModel.endpoints.apiBaseUrl)
@@ -66,9 +60,20 @@ fun SessionDebugPanel(viewModel: MalSessionViewModel, modifier: Modifier = Modif
             }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        // A `FlowRow`, because three buttons of this width do not fit a phone side by side and a
+        // `Row` would clip the last of them off the edge with no way to reach it.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             OutlinedButton(onClick = viewModel::reloadDiagnostics, enabled = !viewModel.busy) {
-                Text("Reload")
+                Text("Reload diagnostics")
+            }
+            // Here rather than on the screen, and next to "Force 401" rather than anywhere else:
+            // reloading the profile is the request that makes a forced 401 refresh, and the two
+            // being one row apart is the whole procedure.
+            OutlinedButton(onClick = viewModel::refreshUser, enabled = !viewModel.busy) {
+                Text("Reload profile")
             }
             // The only way a human ever sees the refresh path execute against real MAL: a shell-only
             // app never sits open for the hour it would otherwise take.
