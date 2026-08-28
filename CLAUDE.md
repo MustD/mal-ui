@@ -181,6 +181,8 @@ Two tiers of shared code, deliberately separated:
 
 The three client modules (`:app:androidApp`, `:app:desktopApp`, `:app:webApp`) are thin entry points only: each has a `main`/`Activity` that sets up its platform's window and calls the single `App()` composable from `:app:shared`. Put UI in `:app:shared`, not in the app modules.
 
+**Screens take a value, not a ViewModel.** `SessionRoute` switches on a sealed `ScreenState` produced in `:core` by `ScreenStateSource` — a total combine over six flows — and each screen takes its variant plus a separate actions record. `App()` resolves the two ViewModels and `AppScreen` wires them to the value and binds the `AuthRedirectChannel`; below that, nothing knows what a ViewModel is. The actions stay out of `ScreenState` because Compose skips on `equals` and a `data class` holding a `() -> Unit` is neither equal nor stable. See `docs/adr/0004-screen-state-in-core.md`, which also carries the answer to "why is a UI type in the module `:server` depends on".
+
 The two additions to that are both sign-in plumbing that only an entry point can do, and both forward immediately into `:app:shared` rather than deciding anything: `MainActivity.onCreate`/`onNewIntent` hand the redirect Intent to `AuthRedirectInbox`, and web's `main()` relays a popup's redirect to its opener before Koin starts. Neither is a place to add behaviour.
 
 `:server` is a standalone Ktor/Netty app (`Application.kt`) that shares only `:core`.

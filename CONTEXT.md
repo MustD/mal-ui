@@ -96,6 +96,22 @@ two buttons are **Reload diagnostics** and **Reload profile**, which reload a Se
 (a **Session** refresh is the token exchange, and the two happen on the same screen), retry (a retry re-requests the one
 page that failed and keeps everything else)
 
+### Screen State
+
+**Screen State**:
+What one of the app's four destinations needs in order to draw itself — derived from a Session and an Anime List, and
+carrying data only. One variant per **Session State** subtype: `Restoring`, `SignedOut`, `Authorizing`, `SignedIn`. In
+code it is `ScreenState`, produced in `:core` by `ScreenStateSource` and switched on by `SessionRoute`. _Avoid_:
+`SessionState` — that is the Session's own state and is one of this value's inputs, not a synonym for it. The two are as
+easy to confuse as **Watch Status** and **Airing Status**, and for the same reason: they share their variant names, so
+the mapping between them looks like a rename. See [ADR-0004](docs/adr/0004-screen-state-in-core.md)
+
+**Actions record**:
+The callbacks one screen can invoke, held apart from its **Screen State** rather than inside it — `SignInActions`,
+`AuthorizingActions`, `SignedInActions`. Separate because Compose skips on `equals` and a `data class` holding a
+`() -> Unit` is neither equal nor stable, so folding them in would recompose the signed-in screen, grid included, on
+every emission. _Avoid_: Callbacks, handlers, events (nothing here is dispatched or queued)
+
 ### Platform
 
 **Relay**:
