@@ -2,10 +2,12 @@
 
 package io.challenge_workshop.mal_ui
 
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -39,6 +41,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.challenge_workshop.mal_ui.animelist.ANIME_LIST_SORT_ORDERS
 import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
 import io.challenge_workshop.mal_ui.animelist.AnimeListSortOrder
@@ -68,6 +71,9 @@ import io.challenge_workshop.mal_ui.auth.SESSION_USER_NAME_TAG
 import io.challenge_workshop.mal_ui.auth.SIGNED_OUT_REASON_TAG
 import io.challenge_workshop.mal_ui.auth.SessionScreenTag
 import io.challenge_workshop.mal_ui.auth.StartupRedirect
+import io.challenge_workshop.mal_ui.auth.rememberAuthRedirectChannel
+import io.challenge_workshop.mal_ui.auth.screenActions
+import io.challenge_workshop.mal_ui.screen.ScreenStateSource
 import io.challenge_workshop.mal_ui.auth.awaitLoopbackPortFree
 import io.challenge_workshop.mal_ui.auth.fakeMal
 import io.challenge_workshop.mal_ui.mal.DESKTOP_LOOPBACK_PORT
@@ -92,6 +98,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -159,7 +166,7 @@ class SessionRouteTest {
     fun every_session_state_renders_one_screen_with_something_on_it() {
         for ((state, expected) in cases) {
             runComposeUiTest {
-                setContent { SessionRoute(state, viewModel, animeList) }
+                setContent { RouteAt(state, animeList) }
 
                 onNodeWithTag(expected.tag).assertIsDisplayed()
                 for (other in SessionScreenTag.entries - expected) {
@@ -192,7 +199,7 @@ class SessionRouteTest {
         val explanations = SignedOutReason.entries.associateWith { reason ->
             var text = ""
             runComposeUiTest {
-                setContent { SessionRoute(SessionState.SignedOut(reason), viewModel, animeList) }
+                setContent { RouteAt(SessionState.SignedOut(reason), animeList) }
                 text = onNodeWithTag(SIGNED_OUT_REASON_TAG).textContent()
             }
             text
@@ -233,7 +240,9 @@ class SessionRouteTest {
             setContent {
                 // Otherwise the desktop `UriHandler` really does launch a browser from a unit test.
                 CompositionLocalProvider(LocalUriHandler provides RecordingUriHandler(opened)) {
-                    SessionRoute(viewModel.state.collectAsState().value, viewModel, animeList)
+                    // The whole adapter, not just the routing: this is the one case that is about the
+                    // real seam, so it needs the channel `AppScreen` binds and the live Session state.
+                    AppScreen(viewModel, animeList)
                 }
             }
 
@@ -244,7 +253,7 @@ class SessionRouteTest {
 
             val state = repository.state.value as SessionState.Authorizing
             assertEquals(DESKTOP_REDIRECT_URI, state.pending.redirectUri)
-            val authorizationUrl = viewModel.authorizationUrlFor(state.pending)
+            val authorizationUrl = repository.authorizationUrlFor(state.pending)
             waitUntil("the channel opens the browser", WAIT_MS) {
                 opened.toList() == listOf(authorizationUrl)
             }
@@ -278,13 +287,13 @@ class SessionRouteTest {
             @Suppress("DEPRECATION")
             setContent {
                 CompositionLocalProvider(LocalClipboardManager provides clipboard) {
-                    SessionRoute(SessionState.Authorizing(pending), viewModel, animeList)
+                    RouteAt(SessionState.Authorizing(pending), animeList)
                 }
             }
 
             onNodeWithText("Copy").performClick()
 
-            assertEquals(viewModel.authorizationUrlFor(pending), clipboard.getText()?.text)
+            assertEquals(repository.authorizationUrlFor(pending), clipboard.getText()?.text)
         }
     }
 
@@ -306,7 +315,7 @@ class SessionRouteTest {
     @Test
     fun the_signed_in_screen_renders_the_anime_list() {
         runComposeUiTest {
-            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
+            setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), animeList) }
 
             waitUntil("the first page lands", WAIT_MS) {
                 animeList.state.value.entries.size == FAKE_MAL_ANIME_TITLES.size
@@ -340,7 +349,7 @@ class SessionRouteTest {
     @Test
     fun toggling_to_the_dense_layout_redraws_the_same_entries() {
         runComposeUiTest {
-            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
+            setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), animeList) }
 
             waitUntil("the first page lands", WAIT_MS) {
                 animeList.state.value.entries.size == FAKE_MAL_ANIME_TITLES.size
@@ -385,7 +394,7 @@ class SessionRouteTest {
         val toggledList = animeListViewModel(toggled)
         try {
             runComposeUiTest {
-                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, toggledList) }
+                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), toggledList) }
 
                 waitUntil("the first page lands", WAIT_MS) { toggledList.state.value.entries.size == 50 }
                 waitForIdle()
@@ -424,7 +433,7 @@ class SessionRouteTest {
     @Test
     fun the_layout_is_remembered_for_the_next_launch() {
         runComposeUiTest {
-            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
+            setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), animeList) }
             waitUntil("the first page lands", WAIT_MS) {
                 animeList.state.value.entries.size == FAKE_MAL_ANIME_TITLES.size
             }
@@ -435,7 +444,7 @@ class SessionRouteTest {
         val relaunched = animeListViewModel(repository)
         try {
             runComposeUiTest {
-                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, relaunched) }
+                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), relaunched) }
                 waitUntil("the remembered Layout is read back", WAIT_MS) {
                     relaunched.layout.value == AnimeListLayout.List
                 }
@@ -463,7 +472,7 @@ class SessionRouteTest {
         val fresh = animeListViewModel(repository, store = JsonTokenStore(FakeKeyValueStore()))
         try {
             runComposeUiTest {
-                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, fresh) }
+                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), fresh) }
                 waitForIdle()
 
                 assertEquals(AnimeListLayout.Cards, fresh.layout.value)
@@ -490,7 +499,7 @@ class SessionRouteTest {
         val pagedList = animeListViewModel(paged)
         try {
             runComposeUiTest {
-                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, pagedList) }
+                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), pagedList) }
 
                 waitUntil("the first page lands", WAIT_MS) { pagedList.state.value.entries.size == 50 }
                 waitForIdle()
@@ -543,7 +552,7 @@ class SessionRouteTest {
         val flakyList = animeListViewModel(flaky)
         try {
             runComposeUiTest {
-                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, flakyList) }
+                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), flakyList) }
                 waitUntil("the first page lands", WAIT_MS) { flakyList.state.value.entries.size == 50 }
 
                 scrollToLastLoadedEntry(flakyList)
@@ -596,7 +605,7 @@ class SessionRouteTest {
         val filteredList = animeListViewModel(filtered)
         try {
             runComposeUiTest {
-                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, filteredList) }
+                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), filteredList) }
 
                 waitUntil("the unfiltered first page lands", WAIT_MS) {
                     filteredList.state.value.entries.size == 50
@@ -667,7 +676,7 @@ class SessionRouteTest {
         val holdingList = animeListViewModel(holding)
         try {
             runComposeUiTest {
-                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, holdingList) }
+                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), holdingList) }
                 waitUntil("the unfiltered first page lands", WAIT_MS) {
                     holdingList.state.value.entries.size == 50
                 }
@@ -720,7 +729,7 @@ class SessionRouteTest {
         val sortedList = animeListViewModel(sorted)
         try {
             runComposeUiTest {
-                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, sortedList) }
+                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), sortedList) }
 
                 waitUntil("the first page lands", WAIT_MS) { sortedList.state.value.entries.size == 50 }
                 // The launch default, and it says which way it sorts rather than just naming a field.
@@ -769,7 +778,7 @@ class SessionRouteTest {
     @Test
     fun the_sort_menu_offers_mals_four_orderings_and_no_direction_toggle() {
         runComposeUiTest {
-            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
+            setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), animeList) }
             waitUntil("the first page lands", WAIT_MS) { animeList.state.value.loaded }
 
             onNodeWithTag(ANIME_LIST_SORT_TAG).performClick()
@@ -797,7 +806,7 @@ class SessionRouteTest {
     @Test
     fun the_overflow_menu_carries_reload_sign_out_and_session_diagnostics() {
         runComposeUiTest {
-            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
+            setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), animeList) }
 
             waitUntil("the first page lands", WAIT_MS) { animeList.state.value.loaded }
 
@@ -839,7 +848,7 @@ class SessionRouteTest {
         fun heightOf(name: String): Dp {
             var height = 0.dp
             runComposeUiTest {
-                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, name)), viewModel, animeList) }
+                setContent { RouteAt(SessionState.SignedIn(MalUser(1, name)), animeList) }
                 waitForIdle()
                 onNodeWithTag(SESSION_USER_NAME_TAG).assertTextContains(name.take(1), substring = true)
                 height = onNodeWithTag(SESSION_USER_NAME_TAG).getBoundsInRoot().height
@@ -866,7 +875,7 @@ class SessionRouteTest {
         runComposeUiTest {
             var refreshing by mutableStateOf(false)
             setContent {
-                SessionRoute(SessionState.SignedIn(MalUser(1, "someone"), refreshing), viewModel, animeList)
+                RouteAt(SessionState.SignedIn(MalUser(1, "someone"), refreshing), animeList)
             }
             waitUntil("the first page lands", WAIT_MS) { animeList.state.value.loaded }
             onNodeWithText(FAKE_MAL_ANIME_TITLES.first()).assertIsDisplayed()
@@ -894,7 +903,7 @@ class SessionRouteTest {
         try {
             runComposeUiTest {
                 setContent {
-                    SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, reloadingList)
+                    RouteAt(SessionState.SignedIn(MalUser(1, "someone")), reloadingList)
                 }
                 waitUntil("the first page lands", WAIT_MS) { reloadingList.state.value.entries.size == 50 }
 
@@ -942,7 +951,7 @@ class SessionRouteTest {
     @Test
     fun session_diagnostics_opens_the_debug_panel_in_a_dialog() {
         runComposeUiTest {
-            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
+            setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), animeList) }
             waitUntil("the Anime List settles", WAIT_MS) { animeList.state.value.loaded }
 
             // "Force 401" writes an invalid token into the store, so it must not be a stray tap away.
@@ -980,7 +989,7 @@ class SessionRouteTest {
                 MalTokens("Bearer", 2_415_600, "a-valid-access-token", "a-refresh-token"),
                 MalUser(1, "someone"),
             )
-            setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, animeList) }
+            setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), animeList) }
             waitUntil("the Anime List settles", WAIT_MS) { animeList.state.value.loaded }
             openDiagnostics()
 
@@ -1010,7 +1019,7 @@ class SessionRouteTest {
         val holdingList = animeListViewModel(holding)
         try {
             runComposeUiTest {
-                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, holdingList) }
+                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), holdingList) }
                 waitUntil("the first page is in flight", WAIT_MS) { holdingList.state.value.loadingFirstPage }
                 waitForIdle()
 
@@ -1041,7 +1050,7 @@ class SessionRouteTest {
             runComposeUiTest {
                 setContent {
                     CompositionLocalProvider(LocalUriHandler provides RecordingUriHandler(opened)) {
-                        SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, nothingList)
+                        RouteAt(SessionState.SignedIn(MalUser(1, "someone")), nothingList)
                     }
                 }
                 waitUntil("the empty first page lands", WAIT_MS) { nothingList.state.value.loaded }
@@ -1080,7 +1089,7 @@ class SessionRouteTest {
         val slicedList = animeListViewModel(sliced)
         try {
             runComposeUiTest {
-                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, slicedList) }
+                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), slicedList) }
                 waitUntil("the whole list lands", WAIT_MS) { slicedList.state.value.entries.size == 50 }
 
                 onNodeWithText("On hold").performClick()
@@ -1119,7 +1128,7 @@ class SessionRouteTest {
         val flakyList = animeListViewModel(flaky)
         try {
             runComposeUiTest {
-                setContent { SessionRoute(SessionState.SignedIn(MalUser(1, "someone")), viewModel, flakyList) }
+                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), flakyList) }
                 waitUntil("the first page fails", WAIT_MS) { flakyList.state.value.firstPageError != null }
                 waitForIdle()
 
@@ -1165,6 +1174,41 @@ class SessionRouteTest {
         onNodeWithTag(SESSION_MENU_BUTTON_TAG).performClick()
         onNodeWithText("Session diagnostics").performClick()
         waitForIdle()
+    }
+
+    /**
+     * The routing, rendered at a chosen [session] with this test's real ViewModels behind it.
+     *
+     * Stands in for `AppScreen` for every case that wants to *choose* the Session state rather than
+     * drive one: the Session is a flow of one value, and the other five inputs are the live ones. The
+     * actions come from the same [screenActions] the app uses, so a control here does what it does
+     * there.
+     *
+     * Ticket 04 is what makes most of these cases stop needing this at all — a `ScreenState` literal
+     * and a record of no-op lambdas is the whole setup for anything that is not about the list moving.
+     */
+    @Composable
+    private fun RouteAt(session: SessionState, list: AnimeListViewModel = animeList) {
+        val sessionFlow = remember { MutableStateFlow(session) }
+        sessionFlow.value = session
+        val channel = rememberAuthRedirectChannel()
+        val uriHandler = LocalUriHandler.current
+        val scope = rememberCoroutineScope()
+        val source = remember(list, scope) {
+            ScreenStateSource(
+                session = sessionFlow,
+                config = viewModel.config,
+                animeList = list.state,
+                layout = list.layout,
+                form = viewModel.form,
+                diagnostics = viewModel.diagnostics,
+                scope = scope,
+            )
+        }
+        val actions = remember(list, channel, uriHandler) {
+            screenActions(viewModel, list, channel, uriHandler::openUri)
+        }
+        SessionRoute(source.state.collectAsStateWithLifecycle().value, actions)
     }
 
     /**

@@ -79,7 +79,7 @@ class MalSessionViewModelStartupTest {
         start(redirect = "$TEST_REDIRECT_URI?code=a-code&state=a-state")
         settle()
 
-        val error = assertNotNull(viewModel.error)
+        val error = assertNotNull(viewModel.form.value.error)
         assertTrue("no sign-in in progress" in error, error)
         assertEquals(SessionState.SignedOut(SignedOutReason.NeverSignedIn), repository.state.value)
     }
@@ -100,8 +100,8 @@ class MalSessionViewModelStartupTest {
             pasting.viewModel.completeSignIn(denied)
             pasting.settle()
 
-            assertNotNull(viewModel.error)
-            assertEquals(pasting.viewModel.error, viewModel.error)
+            assertNotNull(viewModel.form.value.error)
+            assertEquals(pasting.viewModel.form.value.error, viewModel.form.value.error)
             assertEquals(pasting.repository.state.value, repository.state.value)
         } finally {
             pasting.repository.close()
@@ -114,8 +114,8 @@ class MalSessionViewModelStartupTest {
         settle()
 
         assertEquals(SessionState.SignedOut(SignedOutReason.NeverSignedIn), repository.state.value)
-        assertNull(viewModel.error)
-        assertTrue(viewModel.canStart)
+        assertNull(viewModel.form.value.error)
+        assertTrue(viewModel.form.value.canStart)
     }
 
     /**

@@ -57,7 +57,7 @@ class MalSessionViewModelRedirectTest {
         // The browser still opens, and the URL is still offered by hand — no platform's
         // browser-opening call reliably reports whether it worked.
         val pending = assertNotNull(store.readPending())
-        assertEquals(listOf(viewModel.authorizationUrlFor(pending)), opened)
+        assertEquals(listOf(repository.authorizationUrlFor(pending)), opened)
         assertEquals(SessionState.Authorizing(pending), repository.state.value)
 
         viewModel.onPastedRedirectChange("$TEST_REDIRECT_URI?code=the-code&state=${pending.state}")
@@ -75,7 +75,7 @@ class MalSessionViewModelRedirectTest {
         settle()
 
         val pending = assertNotNull(store.readPending())
-        assertEquals(listOf(viewModel.authorizationUrlFor(pending)), channel.openedUrls)
+        assertEquals(listOf(repository.authorizationUrlFor(pending)), channel.openedUrls)
         assertTrue(opened.isEmpty(), "An armed channel owns the browser; opening it twice opens two.")
         // A capture listening anywhere but where MAL redirects is a login that hangs.
         assertEquals(listOf(pending.redirectUri), channel.armedWith)
@@ -120,8 +120,8 @@ class MalSessionViewModelRedirectTest {
             pasting.viewModel.completeSignIn(denied)
             pasting.settle()
 
-            assertNotNull(viewModel.error)
-            assertEquals(pasting.viewModel.error, viewModel.error)
+            assertNotNull(viewModel.form.value.error)
+            assertEquals(pasting.viewModel.form.value.error, viewModel.form.value.error)
             assertEquals(pasting.repository.state.value, repository.state.value)
         } finally {
             pasting.repository.close()
@@ -140,7 +140,7 @@ class MalSessionViewModelRedirectTest {
             "Cancelling must keep the Pending Authorization: a redirect that lands later is good.",
         )
         assertTrue(repository.state.value is SessionState.SignedOut, "${repository.state.value}")
-        assertTrue(viewModel.canStart, "The sign-in button has to come back after a cancellation.")
+        assertTrue(viewModel.form.value.canStart, "The sign-in button has to come back after a cancellation.")
     }
 
     @Test
@@ -150,7 +150,7 @@ class MalSessionViewModelRedirectTest {
         )
         settle()
 
-        assertEquals("the listener died", viewModel.error)
+        assertEquals("the listener died", viewModel.form.value.error)
         // Still `Authorizing`, because the user is away on MAL and can paste what they land on.
         assertTrue(repository.state.value is SessionState.Authorizing, "${repository.state.value}")
     }
@@ -167,12 +167,12 @@ class MalSessionViewModelRedirectTest {
         )
         settle()
 
-        assertNull(viewModel.error, "A capture that timed out is not something to apologise for.")
+        assertNull(viewModel.form.value.error, "A capture that timed out is not something to apologise for.")
         assertTrue(repository.state.value is SessionState.Authorizing, "${repository.state.value}")
         // The URL and the paste field are both on the `Authorizing` screen, and completing by hand
         // has to still work — the authorization itself was never touched.
         assertNotNull(store.readPending())
-        assertFalse(viewModel.busy, "The paste field and Complete button are gated on `busy`.")
+        assertFalse(viewModel.form.value.busy, "The paste field and Complete button are gated on `busy`.")
     }
 
     @Test
@@ -185,13 +185,13 @@ class MalSessionViewModelRedirectTest {
         viewModel.signIn(channel, opened::add)
         settle()
 
-        assertEquals("Port 18040 is already in use.", viewModel.error)
+        assertEquals("Port 18040 is already in use.", viewModel.form.value.error)
         assertTrue(channel.openedUrls.isEmpty() && channel.awaited == 0 && opened.isEmpty())
         // The whole reason `arm` is its own phase: nothing is minted for a flow that cannot finish,
         // and the user has not yet approved anything on myanimelist.net.
         assertNull(store.readPending())
         assertTrue(repository.state.value is SessionState.SignedOut, "${repository.state.value}")
-        assertTrue(viewModel.canStart)
+        assertTrue(viewModel.form.value.canStart)
     }
 
     /**

@@ -25,10 +25,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
 import io.challenge_workshop.mal_ui.animelist.AnimeListLayoutToggle
-import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
-import io.challenge_workshop.mal_ui.session.SessionState
+import io.challenge_workshop.mal_ui.screen.ScreenState
 
 /**
  * The chrome over the signed-in screen: who is signed in, how the list is drawn, and everything that
@@ -54,18 +52,15 @@ import io.challenge_workshop.mal_ui.session.SessionState
  * name precisely because a refresh must not unmount this screen. The list's own loading lives in the
  * list.
  *
- * Takes the two ViewModels rather than a parameter per control, which is the shape every other
- * screen in this package has — and the alternative decomposes into nine parameters, six of which are
- * one of the two ViewModels spelled out a field at a time. [onShowDiagnostics] is the exception
- * because the dialog is the *caller's* state and nothing here can own it.
+ * Takes the signed-in screen's own state and its own actions record, which is the shape every screen
+ * in this package has now. [onShowDiagnostics] is the exception because the dialog is the *caller's*
+ * state and nothing here can own it — the bar opens it, the screen draws it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SignedInTopBar(
-    state: SessionState.SignedIn,
-    viewModel: MalSessionViewModel,
-    animeList: AnimeListViewModel,
-    layout: AnimeListLayout,
+    state: ScreenState.SignedIn,
+    actions: SignedInActions,
     onShowDiagnostics: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -92,7 +87,7 @@ fun SignedInTopBar(
             // In the bar rather than beside the Sort Order, because it is the one control on this
             // screen that is not a query: it re-draws the entries already loaded and asks MAL for
             // nothing, which is also why it is never disabled while a page is in flight.
-            AnimeListLayoutToggle(selected = layout, onSelect = animeList::setLayout)
+            AnimeListLayoutToggle(selected = state.layout, onSelect = actions.onSelectLayout)
             // The menu is anchored to this `Box` rather than to the bar, so it opens under the
             // button that summoned it instead of at the corner of the window.
             Box {
@@ -117,15 +112,15 @@ fun SignedInTopBar(
                         // than the default one.
                         onClick = {
                             menuOpen = false
-                            animeList.reload()
+                            actions.onReload()
                         },
                     )
                     DropdownMenuItem(
                         text = { Text("Sign out") },
-                        enabled = !viewModel.busy,
+                        enabled = !state.busy,
                         onClick = {
                             menuOpen = false
-                            viewModel.signOut()
+                            actions.onSignOut()
                         },
                     )
                     DropdownMenuItem(
@@ -159,8 +154,8 @@ fun SignedInTopBar(
  */
 @Composable
 fun SessionDiagnosticsDialog(
-    state: SessionState.SignedIn,
-    viewModel: MalSessionViewModel,
+    state: ScreenState.SignedIn,
+    actions: DiagnosticsActions,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -177,7 +172,7 @@ fun SessionDiagnosticsDialog(
                     "Signed in as",
                     state.user?.let { "${it.name} (MAL id ${it.id})" } ?: "—",
                 )
-                SessionDebugPanel(viewModel)
+                SessionDebugPanel(state, actions)
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },

@@ -1,13 +1,14 @@
 package io.challenge_workshop.mal_ui.auth
 
 /**
- * The four destinations of the `when` in [io.challenge_workshop.mal_ui.App], named so a test can ask
- * which one is on screen.
+ * The four destinations of the routing `when` in [io.challenge_workshop.mal_ui.SessionRoute], named so
+ * a test can ask which one is on screen.
  *
  * These live in `commonMain` rather than in the test source set on purpose: they are the contract
- * between the routing `when` and the test that asserts it is total. One enum entry per
- * [io.challenge_workshop.mal_ui.session.SessionState] subtype, which is what lets the test compare
- * its own coverage against the sealed interface instead of trusting a hand-written list.
+ * between the routing `when` and the test that asserts that `when` is total. One enum entry per
+ * [io.challenge_workshop.mal_ui.screen.ScreenState] variant — the `when` is over `ScreenState` now,
+ * not over `SessionState` — which is what lets the test compare its own coverage against the sealed
+ * interface instead of trusting a hand-written list.
  */
 enum class SessionScreenTag {
     Restoring,
@@ -116,7 +117,7 @@ val ANIME_LIST_SORT_MENU_TAG: String = "$ANIME_LIST_SORT_TAG.menu"
  * the only control on this screen whose choice is written to the store, so a test that rebuilds the
  * screen has to be able to find it and read which half is selected. (Written, not necessarily
  * durable: on the web Targets the store is `sessionStorage` and goes with the tab — see
- * `AnimeListViewModel.layout`.)
+ * `LayoutPreference.value`.)
  */
 val ANIME_LIST_LAYOUT_TAG: String = "${SessionScreenTag.SignedIn.tag}.layout"
 
@@ -163,7 +164,7 @@ val SESSION_MENU_TAG: String = "$SESSION_TOP_BAR_TAG.menu"
 /**
  * The dialog the Session diagnostics menu entry opens, holding [SessionDebugPanel].
  *
- * **Not a third destination.** `App.kt`'s `when` over `SessionState` stays a four-branch switch and
+ * **Not a third destination.** `App.kt`'s `when` over `ScreenState` stays a four-branch switch and
  * no navigation library is added — a dialog is drawn over the signed-in screen, which is still the
  * screen underneath it.
  */

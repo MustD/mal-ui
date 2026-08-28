@@ -77,6 +77,12 @@ val appModule: Module = module {
     // builds must ride the one authenticated `HttpClient` that owns refresh. The Layout comes in as
     // the preference above rather than as the store, so this ViewModel cannot reach the Session
     // records that live beside it.
+    //
+    // **Do not change this to `single {`.** The `AnimeListPager` this builds is the thing that would
+    // then become process-scoped, and loaded pages must not outlive a sign-out — the next account to
+    // sign in on this device would open on the previous one's list. `ScreenStateSource` takes
+    // `pager.state` rather than the pager for exactly that reason: needing to hand the source an
+    // object is not a reason to promote one.
     viewModel { AnimeListViewModel(repository = get(), layoutPreference = get()) }
 }
 

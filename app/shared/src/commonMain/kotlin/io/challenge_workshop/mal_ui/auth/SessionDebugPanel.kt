@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.challenge_workshop.mal_ui.getPlatform
+import io.challenge_workshop.mal_ui.screen.ScreenState
 
 /**
  * Diagnostics for the signed-in state.
@@ -30,15 +31,19 @@ import io.challenge_workshop.mal_ui.getPlatform
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun SessionDebugPanel(viewModel: MalSessionViewModel, modifier: Modifier = Modifier) {
+fun SessionDebugPanel(
+    state: ScreenState.SignedIn,
+    actions: DiagnosticsActions,
+    modifier: Modifier = Modifier,
+) {
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         LabelledValue("Target", getPlatform().name)
-        LabelledValue("Token endpoint", viewModel.endpoints.tokenEndpoint)
-        LabelledValue("API base", viewModel.endpoints.apiBaseUrl)
-        LabelledValue("Redirect URI", viewModel.redirectUri)
-        LabelledValue("Via relay", if (viewModel.usesRelay) "yes" else "no — MAL directly")
+        LabelledValue("Token endpoint", state.routing.endpoints.tokenEndpoint)
+        LabelledValue("API base", state.routing.endpoints.apiBaseUrl)
+        LabelledValue("Redirect URI", state.routing.redirectUri)
+        LabelledValue("Via relay", if (state.routing.usesRelay) "yes" else "no — MAL directly")
 
-        val diagnostics = viewModel.diagnostics
+        val diagnostics = state.diagnostics
         if (diagnostics == null) {
             Text(
                 "No stored Session.",
@@ -66,18 +71,18 @@ fun SessionDebugPanel(viewModel: MalSessionViewModel, modifier: Modifier = Modif
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            OutlinedButton(onClick = viewModel::reloadDiagnostics, enabled = !viewModel.busy) {
+            OutlinedButton(onClick = actions.onReloadDiagnostics, enabled = !state.busy) {
                 Text("Reload diagnostics")
             }
             // Here rather than on the screen, and next to "Force 401" rather than anywhere else:
             // reloading the profile is the request that makes a forced 401 refresh, and the two
             // being one row apart is the whole procedure.
-            OutlinedButton(onClick = viewModel::refreshUser, enabled = !viewModel.busy) {
+            OutlinedButton(onClick = actions.onRefreshUser, enabled = !state.busy) {
                 Text("Reload profile")
             }
             // The only way a human ever sees the refresh path execute against real MAL: a shell-only
             // app never sits open for the hour it would otherwise take.
-            OutlinedButton(onClick = viewModel::forceExpireAccessToken, enabled = !viewModel.busy) {
+            OutlinedButton(onClick = actions.onForceExpireAccessToken, enabled = !state.busy) {
                 Text("Force 401")
             }
         }

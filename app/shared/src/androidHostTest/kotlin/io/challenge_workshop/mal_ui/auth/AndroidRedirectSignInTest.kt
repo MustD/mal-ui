@@ -91,7 +91,7 @@ class AndroidRedirectSignInTest {
         assertEquals(pending, store.readPending(), "a redirect that is not ours must cost nothing")
         assertTrue(repository.state.value is SessionState.Authorizing, "${repository.state.value}")
         assertEquals(0, exchanges(), "nothing should have been sent to MyAnimeList")
-        assertNull(viewModel.error)
+        assertNull(viewModel.form.value.error)
 
         // And the capture is still live, so the real redirect still completes it.
         inbox.deliver(redirectIntent(pending.state))
@@ -114,7 +114,7 @@ class AndroidRedirectSignInTest {
 
         assertEquals(SessionState.SignedIn(FAKE_MAL_USER), awaitSettledSession())
         assertEquals(1, exchanges(), "a re-delivered redirect must not be exchanged twice")
-        assertNull(viewModel.error)
+        assertNull(viewModel.form.value.error)
     }
 
     /**
@@ -137,7 +137,7 @@ class AndroidRedirectSignInTest {
 
         assertEquals(pending, store.readPending(), "a suspected cancellation must keep the verifier")
         assertTrue(repository.state.value is SessionState.SignedOut, "${repository.state.value}")
-        assertTrue(viewModel.canStart, "and the sign-in button has to come back")
+        assertTrue(viewModel.form.value.canStart, "and the sign-in button has to come back")
     }
 
     /**
@@ -176,7 +176,7 @@ class AndroidRedirectSignInTest {
         reopened.settle()
 
         assertEquals(SessionState.SignedIn(FAKE_MAL_USER), reopened.repository.state.value)
-        assertNull(reopened.viewModel.error, "a spent launch Intent must not be reported as a failure")
+        assertNull(reopened.viewModel.form.value.error, "a spent launch Intent must not be reported as a failure")
     }
 
     /**
@@ -196,7 +196,7 @@ class AndroidRedirectSignInTest {
 
         assertEquals(SessionState.SignedIn(FAKE_MAL_USER), awaitSettledSession())
         assertEquals(1, exchanges(), "the two sides of the race must not both be exchanged")
-        assertNull(viewModel.error)
+        assertNull(viewModel.form.value.error)
     }
 
     /**
@@ -214,8 +214,8 @@ class AndroidRedirectSignInTest {
 
         assertEquals(pending, store.readPending(), "a cancelled Auth Tab must keep the verifier")
         assertTrue(repository.state.value is SessionState.SignedOut, "${repository.state.value}")
-        assertTrue(viewModel.canStart, "and the sign-in button has to come back")
-        assertNull(viewModel.error, "backing out is not an error to report")
+        assertTrue(viewModel.form.value.canStart, "and the sign-in button has to come back")
+        assertNull(viewModel.form.value.error, "backing out is not an error to report")
     }
 
     /**
@@ -252,7 +252,7 @@ class AndroidRedirectSignInTest {
         settle()
 
         assertEquals(SessionState.SignedIn(FAKE_MAL_USER), repository.state.value)
-        assertNull(viewModel.error)
+        assertNull(viewModel.form.value.error)
     }
 
     /**

@@ -57,11 +57,11 @@ class MalSessionViewModelTest {
 
         val exposed = listOf(
             viewModel.state.value,
-            viewModel.diagnostics,
-            viewModel.clientId,
-            viewModel.pastedRedirect,
-            viewModel.redirectUri,
-            viewModel.error,
+            viewModel.diagnostics.value,
+            viewModel.form.value.clientId,
+            viewModel.form.value.pastedRedirect,
+            viewModel.config.value.redirectUri,
+            viewModel.form.value.error,
         ).joinToString(" ") { it.toString() }
 
         assertFalse(ACCESS in exposed, exposed)
@@ -70,7 +70,7 @@ class MalSessionViewModelTest {
 
     @Test
     fun the_client_id_field_is_prefilled_from_the_build_time_default() {
-        assertEquals("prefilled", MalSessionViewModel(repository, StartupRedirect.None).clientId)
+        assertEquals("prefilled", MalSessionViewModel(repository, StartupRedirect.None).form.value.clientId)
     }
 
     @Test
@@ -81,7 +81,7 @@ class MalSessionViewModelTest {
         // field has to be re-synced once `restore()` has settled it.
         val viewModel = MalSessionViewModel(repository, StartupRedirect.None)
 
-        assertEquals("remembered-on-this-device", viewModel.clientId)
+        assertEquals("remembered-on-this-device", viewModel.form.value.clientId)
     }
 
     @Test
@@ -120,8 +120,8 @@ class MalSessionViewModelTest {
             StartupRedirect.None,
         )
 
-        assertFalse(viewModel.canStart)
+        assertFalse(viewModel.form.value.canStart)
         viewModel.onClientIdChange("something")
-        assertTrue(viewModel.canStart)
+        assertTrue(viewModel.form.value.canStart)
     }
 }

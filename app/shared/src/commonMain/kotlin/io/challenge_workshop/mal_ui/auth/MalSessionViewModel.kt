@@ -1,17 +1,18 @@
 package io.challenge_workshop.mal_ui.auth
 
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import io.challenge_workshop.mal_ui.mal.MalAuthConfig
+import io.challenge_workshop.mal_ui.mal.platformMalEndpoints
+import io.challenge_workshop.mal_ui.screen.SignInForm
 import io.challenge_workshop.mal_ui.session.MalSessionRepository
-import io.challenge_workshop.mal_ui.session.PendingAuthorization
 import io.challenge_workshop.mal_ui.session.SessionDiagnostics
 import io.challenge_workshop.mal_ui.session.SessionState
-import io.challenge_workshop.mal_ui.mal.platformMalEndpoints
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -25,6 +26,11 @@ import kotlin.coroutines.cancellation.CancellationException
  * pair, which state we are in — belongs to the repository, which is a process-scoped singleton and so
  * survives this class being recreated. What is left here is genuinely ephemeral form text plus a
  * `busy` flag, and losing all of it to a configuration change or process death is correct.
+ *
+ * Its two `StateFlow`s are two of the Screen State's six inputs. They are `StateFlow` rather than
+ * `mutableStateOf` for exactly that reason: `ScreenStateSource` is in `:core` and has no Compose
+ * dependency to read a snapshot state with. Nothing else about them changed — they are still
+ * ephemeral, and still lost with this object.
  */
 class MalSessionViewModel(
     private val repository: MalSessionRepository,
@@ -34,55 +40,50 @@ class MalSessionViewModel(
     val state: StateFlow<SessionState> = repository.state
 
     /**
-     * Prefilled so it reads as an override rather than a mandatory step: the Client ID the device
-     * remembers if there is one, and the build-time `mal.clientId` default otherwise. A public
-     * client's ID is not a secret — it is visible in the user's own address bar — so the only goal is
-     * convenience and not-in-git.
+     * The live config, which the Screen State needs in order to rebuild the authorization URL and to
+     * say which Redirect URI this build sends.
      *
-     * Seeded twice, because the remembered value comes out of the store and so cannot be in the
-     * config yet when this object is constructed: once here, and again from `init` once `restore()`
-     * has settled it.
+     * Passed through rather than copied: the remembered Client ID only reaches it after `restore()`,
+     * and a snapshot taken here would be the build-time default forever.
      */
-    var clientId by mutableStateOf(repository.config.value.clientId)
-        private set
+    val config: StateFlow<MalAuthConfig> = repository.config
 
-    var pastedRedirect by mutableStateOf("")
-        private set
-
-    var busy by mutableStateOf(false)
-        private set
-
-    var error by mutableStateOf<String?>(null)
-        private set
+    /**
+     * The sign-in form, prefilled so the Client ID reads as an override rather than a mandatory step:
+     * the Client ID the device remembers if there is one, and the build-time `mal.clientId` default
+     * otherwise. A public client's ID is not a secret — it is visible in the user's own address bar —
+     * so the only goal is convenience and not-in-git.
+     *
+     * Seeded twice, because the remembered value comes out of the store and so cannot be in the config
+     * yet when this object is constructed: once here, and again from `init` once `restore()` has
+     * settled it.
+     *
+     * There is deliberately no Client Secret field. `MalAuthConfig.clientSecret` stays, because it is
+     * correct for a `web`-type app, but offering it in the UI only creates a way to mis-register.
+     */
+    private val _form = MutableStateFlow(SignInForm(clientId = repository.config.value.clientId))
+    val form: StateFlow<SignInForm> = _form.asStateFlow()
 
     /**
      * Token metadata for the debug panel, refreshed on demand rather than observed — it changes only
      * when something the panel itself triggered has finished.
      *
+     * A separate flow from [form], and not a field of it: `busy` and `error` are read by three screens
+     * and this by one dialog that only opens deliberately, so folding them together would make every
+     * keystroke in the Client ID field emit a record carrying diagnostics nothing is reading.
+     *
      * Never token values: [SessionDiagnostics] has no field that could hold one.
      */
-    var diagnostics by mutableStateOf<SessionDiagnostics?>(null)
-        private set
-
-    /**
-     * There is deliberately no Client Secret field. `MalAuthConfig.clientSecret` stays, because it is
-     * correct for a `web`-type app, but offering it in the UI only creates a way to mis-register.
-     */
+    private val _diagnostics = MutableStateFlow<SessionDiagnostics?>(null)
+    val diagnostics: StateFlow<SessionDiagnostics?> = _diagnostics.asStateFlow()
 
     /** Effective endpoints, surfaced in the UI because a misrouted web build is otherwise silent. */
-    val endpoints = platformMalEndpoints()
-
-    /**
-     * The Redirect URI this target sends to MAL. Surfaced because a mismatch reports as a 401
-     * `invalid_client`, which points at the Client ID and not at the URI.
-     */
-    val redirectUri: String get() = repository.config.value.redirectUri
+    private val endpoints = platformMalEndpoints()
 
     /** True on web, where token and API calls go via `:server` instead of straight to MAL. */
-    val usesRelay: Boolean = !endpoints.tokenEndpoint.startsWith("https://myanimelist.net")
+    private val usesRelay: Boolean = !endpoints.tokenEndpoint.startsWith("https://myanimelist.net")
 
-    val canStart: Boolean get() = clientId.isNotBlank() && !busy
-    val canComplete: Boolean get() = pastedRedirect.isNotBlank() && !busy
+    private val busy: Boolean get() = _form.value.busy
 
     private var authJob: Job? = null
 
@@ -102,7 +103,7 @@ class MalSessionViewModel(
                 // A remembered Client ID only exists in the config after this point. Safe to
                 // overwrite the field: `busy` is set for the length of this block, and the Client ID
                 // input is disabled while it is, so there is nothing typed to lose.
-                clientId = repository.config.value.clientId
+                _form.update { it.copy(clientId = repository.config.value.clientId) }
                 // Strictly after the store has been read. `restore` settles the state from what it
                 // finds there, so completing a redirect first would have its `SignedIn` overwritten
                 // a moment later by whatever the store said before the sign-in.
@@ -116,14 +117,12 @@ class MalSessionViewModel(
     }
 
     fun onClientIdChange(value: String) {
-        clientId = value
-        error = null
+        _form.update { it.copy(clientId = value, error = null) }
         repository.useClientId(value)
     }
 
     fun onPastedRedirectChange(value: String) {
-        pastedRedirect = value
-        error = null
+        _form.update { it.copy(pastedRedirect = value, error = null) }
     }
 
     /**
@@ -147,15 +146,15 @@ class MalSessionViewModel(
      * a socket on `Dispatchers.IO` and genuinely dispatches.
      */
     fun signIn(channel: AuthRedirectChannel, openUri: (String) -> Unit) {
-        if (!canStart) return
-        repository.useClientId(clientId)
+        if (!_form.value.canStart) return
+        repository.useClientId(_form.value.clientId)
         // One coroutine for the whole attempt, including the wait. An armed channel that is never
         // awaited can never be released, so nothing may come between arming it and awaiting it.
         signInJob = launchGuarded {
-            when (val armed = channel.arm(redirectUri)) {
+            when (val armed = channel.arm(repository.config.value.redirectUri)) {
                 // Reported before anything is minted and before the user has approved anything on MAL
                 // — which is the entire reason `arm` is a phase of its own.
-                is ArmResult.Failed -> error = armed.message
+                is ArmResult.Failed -> _form.update { it.copy(error = armed.message) }
 
                 // No capture here, so the screen opens the browser itself and Paste-the-code takes
                 // over. Calling `open` on a channel that declined to arm would capture nothing.
@@ -166,7 +165,7 @@ class MalSessionViewModel(
                     // The user is away on myanimelist.net from here, and nothing is in flight. `busy`
                     // disables the paste field, the Complete button and Cancel, so leaving it set for
                     // the length of the wait would take Paste-the-code away exactly when it is needed.
-                    busy = false
+                    _form.update { it.copy(busy = false) }
                     awaitCapture(channel)
                 }
             }
@@ -177,7 +176,7 @@ class MalSessionViewModel(
     private suspend fun awaitCapture(channel: AuthRedirectChannel) {
         when (val captured = channel.await()) {
             is AuthRedirectResult.Received -> {
-                busy = true
+                _form.update { it.copy(busy = true) }
                 // Verbatim into the same call the paste field makes, so one parser and one set of
                 // errors — `error=access_denied` reads identically however the redirect arrived.
                 completeAuthorization(captured.rawRedirect)
@@ -187,14 +186,14 @@ class MalSessionViewModel(
 
             // The capture broke, not the authorization: stay in `Authorizing`, where the URL and the
             // paste field are both still on screen.
-            is AuthRedirectResult.Failed -> error = captured.message
+            is AuthRedirectResult.Failed -> _form.update { it.copy(error = captured.message) }
 
             AuthRedirectResult.Unsupported -> Unit
         }
     }
 
     /** Paste-the-code, and also the path every platform Redirect Capture funnels into. */
-    fun completeSignIn(rawRedirect: String = pastedRedirect) {
+    fun completeSignIn(rawRedirect: String = _form.value.pastedRedirect) {
         if (rawRedirect.isBlank() || busy) return
         launchGuarded {
             completeAuthorization(rawRedirect)
@@ -206,7 +205,7 @@ class MalSessionViewModel(
 
     private suspend fun completeAuthorization(rawRedirect: String) {
         repository.completeAuthorization(rawRedirect)
-        pastedRedirect = ""
+        _form.update { it.copy(pastedRedirect = "") }
     }
 
     /** Backing out. Keeps the Pending Authorization — a redirect that lands later is still good. */
@@ -214,36 +213,31 @@ class MalSessionViewModel(
         authJob?.cancel()
         // Also releases whatever the channel reserved: cancellation is its only teardown path.
         signInJob?.cancel()
-        busy = false
+        _form.update { it.copy(busy = false) }
         launchGuarded { repository.cancelAuthorization() }
     }
 
     fun signOut() {
-        pastedRedirect = ""
+        _form.update { it.copy(pastedRedirect = "") }
         signInJob?.cancel()
         launchGuarded { repository.signOut() }
     }
 
     fun refreshUser() = launchGuarded {
         repository.fetchUser()
-        diagnostics = repository.diagnostics()
+        _diagnostics.value = repository.diagnostics()
     }
 
-    fun reloadDiagnostics() = launchGuarded { diagnostics = repository.diagnostics() }
+    fun reloadDiagnostics() = launchGuarded { _diagnostics.value = repository.diagnostics() }
 
     /** Debug panel: invalidate the access token so the next call refreshes against real MAL. */
     fun forceExpireAccessToken() = launchGuarded {
         repository.forceExpireAccessToken()
-        diagnostics = repository.diagnostics()
+        _diagnostics.value = repository.diagnostics()
     }
 
-    /** The URL for a restored Pending Authorization, so the UI can offer it after a restart. */
-    fun authorizationUrlFor(pending: PendingAuthorization): String =
-        repository.authorizationUrlFor(pending)
-
     private fun launchGuarded(block: suspend () -> Unit): Job {
-        busy = true
-        error = null
+        _form.update { it.copy(busy = true, error = null) }
         return viewModelScope.launch {
             try {
                 block()
@@ -253,9 +247,9 @@ class MalSessionViewModel(
                 // in an error card.
                 throw e
             } catch (e: Exception) {
-                error = withRelayHint(e.message ?: e.toString())
+                _form.update { it.copy(error = withRelayHint(e.message ?: e.toString())) }
             } finally {
-                busy = false
+                _form.update { it.copy(busy = false) }
             }
         }.also { authJob = it }
     }

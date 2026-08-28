@@ -41,16 +41,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.challenge_workshop.mal_ui.animelist.AnimeListFilters
 import io.challenge_workshop.mal_ui.animelist.AnimeListSortMenu
-import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.animelist.LoadMoreWhenNearEnd
 import io.challenge_workshop.mal_ui.animelist.animeListItems
 import io.challenge_workshop.mal_ui.animelist.contentMaxWidth
 import io.challenge_workshop.mal_ui.animelist.gridCells
-import io.challenge_workshop.mal_ui.session.SessionState
-import io.challenge_workshop.mal_ui.session.SignedOutReason
+import io.challenge_workshop.mal_ui.screen.ScreenState
 
 /**
  * Shown while the store is being read.
@@ -71,28 +68,28 @@ fun RestoringScreen(modifier: Modifier = Modifier) {
  */
 @Composable
 fun SignInScreen(
-    state: SessionState.SignedOut,
-    viewModel: MalSessionViewModel,
-    channel: AuthRedirectChannel,
+    state: ScreenState.SignedOut,
+    actions: SignInActions,
     modifier: Modifier = Modifier,
 ) {
-    val uriHandler = LocalUriHandler.current
-
     ScreenColumn(modifier) {
         Text("Sign in to MyAnimeList", style = MaterialTheme.typography.headlineSmall)
         Text(
-            explain(state.reason),
+            // The copy is the state's, not this screen's: what separates the four Signed Out Reasons
+            // is exactly what they say, and `:core`'s mapping test compares all four in one place on
+            // four Targets.
+            state.explanation,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.testTag(SIGNED_OUT_REASON_TAG),
         )
 
         OutlinedTextField(
-            value = viewModel.clientId,
-            onValueChange = viewModel::onClientIdChange,
+            value = state.form.clientId,
+            onValueChange = actions.onClientIdChange,
             label = { Text("Client ID") },
             singleLine = true,
-            enabled = !viewModel.busy,
+            enabled = !state.form.busy,
             modifier = Modifier.fillMaxWidth(),
             supportingText = {
                 Text(
@@ -102,9 +99,9 @@ fun SignInScreen(
             },
         )
 
-        if (viewModel.usesRelay) {
+        if (state.routing.usesRelay) {
             Text(
-                "This build routes token and API calls through ${viewModel.endpoints.tokenEndpoint} " +
+                "This build routes token and API calls through ${state.routing.endpoints.tokenEndpoint} " +
                     "because MAL sends no CORS headers to browsers. Run `./gradlew :server:run` first.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -116,18 +113,17 @@ fun SignInScreen(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             // Called straight from the click and not out of a `launch { }`: a web popup's user
-            // activation is a timestamp window, and WebKit's is one second wide.
-            Button(
-                onClick = { viewModel.signIn(channel, uriHandler::openUri) },
-                enabled = viewModel.canStart,
-            ) {
+            // activation is a timestamp window, and WebKit's is one second wide. A lambda hop is
+            // synchronous, so routing this through an actions record does not spend any of it —
+            // `PopupUserActivationTest` is what holds that to the production dispatcher.
+            Button(onClick = actions.onSignIn, enabled = state.form.canStart) {
                 Text("Sign in with MyAnimeList")
             }
-            if (viewModel.busy) CircularProgressIndicator(Modifier.padding(4.dp))
+            if (state.form.busy) CircularProgressIndicator(Modifier.padding(4.dp))
         }
 
         state.error?.let { ErrorCard("Sign-in failed", it) }
-        viewModel.error?.let { ErrorCard("Sign-in failed", it) }
+        state.form.error?.let { ErrorCard("Sign-in failed", it) }
     }
 }
 
@@ -141,8 +137,8 @@ fun SignInScreen(
  */
 @Composable
 fun AuthorizingScreen(
-    state: SessionState.Authorizing,
-    viewModel: MalSessionViewModel,
+    state: ScreenState.Authorizing,
+    actions: AuthorizingActions,
     modifier: Modifier = Modifier,
 ) {
     ScreenColumn(modifier) {
@@ -155,13 +151,12 @@ fun AuthorizingScreen(
         )
         LinearProgressIndicator(Modifier.fillMaxWidth())
 
-        val authorizationUrl = viewModel.authorizationUrlFor(state.pending)
         @Suppress("DEPRECATION")
         // `LocalClipboard` supersedes this, but its `ClipEntry` has no common constructor from text
         // in Compose 1.11 — a copy button through it would need three actuals to write a string.
         val clipboard = LocalClipboardManager.current
         OutlinedTextField(
-            value = authorizationUrl,
+            value = state.authorizationUrl,
             onValueChange = {},
             readOnly = true,
             label = { Text("Authorization URL") },
@@ -171,7 +166,7 @@ fun AuthorizingScreen(
             // people give up on the fallback, and the fallback is the only mechanism that always
             // works. Never logged: under `plain` PKCE the code verifier is inside this string.
             trailingIcon = {
-                TextButton(onClick = { clipboard.setText(AnnotatedString(authorizationUrl)) }) {
+                TextButton(onClick = { clipboard.setText(AnnotatedString(state.authorizationUrl)) }) {
                     Text("Copy")
                 }
             },
@@ -180,10 +175,10 @@ fun AuthorizingScreen(
         HorizontalDivider()
 
         OutlinedTextField(
-            value = viewModel.pastedRedirect,
-            onValueChange = viewModel::onPastedRedirectChange,
+            value = state.form.pastedRedirect,
+            onValueChange = actions.onPastedRedirectChange,
             label = { Text("Redirect URL or authorization code") },
-            enabled = !viewModel.busy,
+            enabled = !state.form.busy,
             minLines = 2,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -191,14 +186,14 @@ fun AuthorizingScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Button(onClick = { viewModel.completeSignIn() }, enabled = viewModel.canComplete) {
+            Button(onClick = actions.onCompleteSignIn, enabled = state.form.canComplete) {
                 Text("Complete sign-in")
             }
-            TextButton(onClick = viewModel::cancelSignIn, enabled = !viewModel.busy) { Text("Cancel") }
-            if (viewModel.busy) CircularProgressIndicator(Modifier.padding(4.dp))
+            TextButton(onClick = actions.onCancelSignIn, enabled = !state.form.busy) { Text("Cancel") }
+            if (state.form.busy) CircularProgressIndicator(Modifier.padding(4.dp))
         }
 
-        viewModel.error?.let { ErrorCard("Could not complete the sign-in", it) }
+        state.form.error?.let { ErrorCard("Could not complete the sign-in", it) }
     }
 }
 
@@ -215,11 +210,10 @@ fun AuthorizingScreen(
  * the Layout changes the column count and the width cap and nothing else — no second scroll state,
  * no second paging trigger, and no second copy of the five screen states.
  *
- * The Layout comes off [animeList] rather than being a parameter, because it is a remembered choice
- * now: it is read from the store and written back there, and a parameter would be a second source of
- * truth that the toggle could not write to. Switching it re-draws the entries already loaded and
- * makes no request — which is why the toggle beside the filter row is not disabled while a page is
- * in flight, and the other two controls are.
+ * The Layout arrives on [state] like everything else. It is a remembered choice — read from the
+ * store and written back there by `LayoutPreference` — so the toggle changes it by asking, not by
+ * owning it. Switching it re-draws the entries already loaded and makes no request, which is why the
+ * toggle in the bar is not disabled while a page is in flight and the other two controls are.
  *
  * **All of that chrome sits *above* the entries, and that is not a layout preference.** Anything
  * placed after them is unreachable on a real account: every scroll towards it enters the prefetch
@@ -235,23 +229,22 @@ fun AuthorizingScreen(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SignedInScreen(
-    state: SessionState.SignedIn,
-    viewModel: MalSessionViewModel,
-    animeList: AnimeListViewModel,
+    state: ScreenState.SignedIn,
+    actions: SignedInActions,
     modifier: Modifier = Modifier,
 ) {
     val gridState = rememberLazyGridState()
     // Whether the diagnostics dialog is over the screen. A dialog, not a destination — see
     // [SESSION_DIAGNOSTICS_TAG].
     var diagnosticsOpen by remember { mutableStateOf(false) }
-    val list = animeList.state.collectAsStateWithLifecycle().value
-    val layout = animeList.layout.collectAsStateWithLifecycle().value
+    val list = state.list
+    val layout = state.layout
     val contentWidth = Modifier.widthIn(max = layout.contentMaxWidth()).fillMaxWidth()
 
     // Not in the ViewModel's `init`: the pager must only ask MAL for a list once there is a
     // signed-in screen to show one on. The pager itself ignores a repeat, so a recomposition
     // costs nothing.
-    LaunchedEffect(Unit) { animeList.loadFirstPage() }
+    LaunchedEffect(Unit) { actions.onLoadFirstPage() }
     // Armed on `loaded`, not on "there are entries": a first page can come back empty and still
     // carry a `paging.next`, and a pager that is not exhausted with no way left to ask it for more
     // is a list that has silently stopped. Disarmed once exhausted, so the trigger costs nothing at
@@ -261,7 +254,7 @@ fun SignedInScreen(
         loadedCount = list.entries.size,
         revision = list.revision,
         enabled = list.loaded && !list.exhausted,
-        onLoadMore = animeList::loadMore,
+        onLoadMore = actions.onLoadMore,
     )
 
     // The replacement page has landed and the content underneath the user's scroll position has
@@ -287,11 +280,7 @@ fun SignedInScreen(
     ) {
         SignedInTopBar(
             state = state,
-            viewModel = viewModel,
-            animeList = animeList,
-            // The one thing the bar cannot read off `animeList` itself: the Layout is already
-            // collected here, for the grid's column count and its width cap.
-            layout = layout,
+            actions = actions,
             onShowDiagnostics = { diagnosticsOpen = true },
             modifier = Modifier.fillMaxWidth(),
         )
@@ -309,7 +298,7 @@ fun SignedInScreen(
                 // entries on screen are the previous query's until the replacement lands, so a live
                 // control would invite a second pick against a list that has not changed yet.
                 enabled = !list.loadingFirstPage,
-                onSelect = animeList::setWatchStatus,
+                onSelect = actions.onSelectWatchStatus,
             )
             // Still a `FlowRow` with one child in it, now that the Layout toggle has gone to the
             // top app bar: the Sort Order button names its direction in words ("Last updated
@@ -325,14 +314,14 @@ fun SignedInScreen(
                 AnimeListSortMenu(
                     selected = list.sortOrder,
                     enabled = !list.loadingFirstPage,
-                    onSelect = animeList::setSortOrder,
+                    onSelect = actions.onSelectSortOrder,
                 )
             }
             // Above the list rather than at the bottom of it, so a failed sign-out, Reload or
             // profile reload is visible from where the user actually is — and outside the grid, so
             // it does not scroll away from the controls that caused it. Under the `FlowRow` rather
             // than in it: it is a card the width of the pane, not a control to lay out beside one.
-            viewModel.error?.let { ErrorCard("Something went wrong", it) }
+            state.error?.let { ErrorCard("Something went wrong", it) }
         }
         LazyVerticalGrid(
             // The Layout is entirely this: how many columns the entries get, and how wide the whole
@@ -353,34 +342,21 @@ fun SignedInScreen(
             animeListItems(
                 state = list,
                 layout = layout,
-                onRetry = animeList::retry,
+                onRetry = actions.onRetry,
                 // "Show all" is the same gesture as tapping the All chip, and goes through the same
                 // reset — an empty slice's way out must not become a second way of changing filter.
-                onShowAll = { animeList.setWatchStatus(null) },
+                onShowAll = { actions.onSelectWatchStatus(null) },
             )
         }
 
         if (diagnosticsOpen) {
-            SessionDiagnosticsDialog(state, viewModel, onDismiss = { diagnosticsOpen = false })
+            SessionDiagnosticsDialog(
+                state = state,
+                actions = actions.diagnostics,
+                onDismiss = { diagnosticsOpen = false },
+            )
         }
     }
-}
-
-/** `SignedOutReason` exists so this can say something specific instead of a bare "signed out". */
-private fun explain(reason: SignedOutReason): String = when (reason) {
-    SignedOutReason.NeverSignedIn ->
-        "MAL has no password grant, so nothing is typed here — you approve access on " +
-            "myanimelist.net and come straight back."
-
-    SignedOutReason.UserSignedOut ->
-        "Signed out. Your tokens have been deleted from this device."
-
-    SignedOutReason.RefreshRejected ->
-        "Your MyAnimeList session expired and could not be renewed, so you will need to " +
-            "approve access again."
-
-    SignedOutReason.AuthorizationFailed ->
-        "That sign-in attempt did not complete. Starting again mints a fresh code."
 }
 
 @Composable
