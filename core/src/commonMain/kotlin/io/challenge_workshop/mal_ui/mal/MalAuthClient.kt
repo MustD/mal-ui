@@ -7,7 +7,6 @@ import io.ktor.client.request.forms.submitForm
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.http.HttpHeaders
-import io.ktor.http.URLBuilder
 import io.ktor.http.parameters
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
@@ -73,16 +72,15 @@ class MalAuthClient(
      * byte-exactly.
      */
     fun authorizationFor(codeVerifier: String, state: String): MalAuthRequest {
+        // Minting is the one place a blank Client ID is a misconfiguration rather than a state to
+        // render, which is why the check is here and not in [authorizationUrl] — that one is
+        // called from a total mapping, and a mapping that can throw is not total.
         require(config.clientId.isNotBlank()) { "clientId must not be blank" }
-        val url = URLBuilder(config.authorizeEndpoint).apply {
-            parameters.append("response_type", "code")
-            parameters.append("client_id", config.clientId)
-            parameters.append("code_challenge", Pkce.codeChallengeOf(codeVerifier))
-            parameters.append("code_challenge_method", Pkce.CHALLENGE_METHOD)
-            parameters.append("state", state)
-            parameters.append("redirect_uri", config.redirectUri)
-        }.buildString()
-        return MalAuthRequest(authorizationUrl = url, codeVerifier = codeVerifier, state = state)
+        return MalAuthRequest(
+            authorizationUrl = authorizationUrl(config, codeVerifier, state),
+            codeVerifier = codeVerifier,
+            state = state,
+        )
     }
 
     /** Step 3: exchange an authorization code for tokens. */

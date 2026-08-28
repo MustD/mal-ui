@@ -1,5 +1,6 @@
 package io.challenge_workshop.mal_ui.mal
 
+import io.ktor.http.URLBuilder
 import io.ktor.http.parseQueryString
 
 /**
@@ -12,6 +13,31 @@ data class MalAuthRequest(
     val codeVerifier: String,
     val state: String,
 )
+
+/**
+ * The URL that sends the user to MyAnimeList to approve access.
+ *
+ * **The one construction site for this URL.** Two would drift, and MAL matches `redirect_uri`
+ * byte-exactly. [MalAuthClient.authorizationFor] mints a verifier and calls this; the Screen State's
+ * mapping rebuilds the URL for a Pending Authorization and calls this — which is possible at all only
+ * because MAL supports `plain` PKCE, so the challenge *is* the verifier and there is nothing in the
+ * URL that is not in the record.
+ *
+ * A plain function rather than a method, so rebuilding the URL needs neither an `HttpClient` nor a
+ * suspension point: the Screen State's combine is pure, and a `(PendingAuthorization) -> String`
+ * adapter passed into it would be a seam with one implementation.
+ *
+ * **Never log the result.** Under `plain` PKCE the code verifier travels inside it.
+ */
+fun authorizationUrl(config: MalAuthConfig, codeVerifier: String, state: String): String =
+    URLBuilder(config.authorizeEndpoint).apply {
+        parameters.append("response_type", "code")
+        parameters.append("client_id", config.clientId)
+        parameters.append("code_challenge", Pkce.codeChallengeOf(codeVerifier))
+        parameters.append("code_challenge_method", Pkce.CHALLENGE_METHOD)
+        parameters.append("state", state)
+        parameters.append("redirect_uri", config.redirectUri)
+    }.buildString()
 
 /** The authorization code recovered from the redirect the user was sent to. */
 data class MalAuthCode(

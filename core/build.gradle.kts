@@ -57,6 +57,12 @@ kotlin {
         jvmMain.dependencies {
             implementation(libs.ktor.clientCio)
         }
+        // `KClass.sealedSubclasses` is jvm-only and needs the reflection implementation at runtime.
+        // One test uses it — `ScreenStateCoverageTest`, which holds the mapping test's list of cases
+        // to the sealed interface — and it is the only reason this is here.
+        jvmTest.dependencies {
+            implementation(libs.kotlin.reflect)
+        }
         webMain.dependencies {
             implementation(libs.ktor.clientJs)
         }
