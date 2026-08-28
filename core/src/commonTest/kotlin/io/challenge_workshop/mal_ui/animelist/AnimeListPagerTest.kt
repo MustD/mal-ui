@@ -494,6 +494,32 @@ class AnimeListPagerTest {
     }
 
     /**
+     * A [AnimeListPager.reset] with neither argument keeps both — which is what Reload is.
+     *
+     * Reload is the way to pick up a change made on myanimelist.net, so it has to refetch the list
+     * the user is *looking at* rather than the default one. Both arguments default to what is already
+     * on screen, and a `reset()` that defaulted them to `null` and `LastUpdated` instead would look
+     * identical on a screen nobody had touched — which is every screen a test starts on.
+     */
+    @Test
+    fun reset_with_no_arguments_refetches_the_list_on_screen_from_its_start() = runTest {
+        val (pager, mal) = pagerOver(pageSize = 2, animeList = page(FakeEntry(1, "Cowboy Bebop")))
+
+        pager.reset(watchStatus = WatchStatus.Watching, sortOrder = AnimeListSortOrder.Title)
+        pager.next()
+        mal.animeListRequests.clear()
+
+        pager.reset()
+
+        assertEquals(1, mal.animeListRequests.size, "Reload asks once")
+        assertEquals("watching", mal.animeListRequests.single().parameters["status"])
+        assertEquals("anime_title", mal.animeListRequests.single().parameters["sort"])
+        assertEquals("0", mal.animeListRequests.single().parameters["offset"])
+        assertEquals(WatchStatus.Watching, pager.state.value.watchStatus)
+        assertEquals(AnimeListSortOrder.Title, pager.state.value.sortOrder)
+    }
+
+    /**
      * The other half of a filter change: the pages *after* the first one.
      *
      * `offset` is driven from here, so a reset that forgot to put it back would page the new list

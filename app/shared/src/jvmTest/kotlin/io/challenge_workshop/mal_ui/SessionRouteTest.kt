@@ -2,12 +2,9 @@
 
 package io.challenge_workshop.mal_ui
 
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -26,7 +23,7 @@ import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.getBoundsInRoot
-import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onChildren
@@ -35,16 +32,17 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
 import androidx.lifecycle.ViewModelStore
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.challenge_workshop.mal_ui.animelist.ANIME_LIST_SORT_ORDERS
 import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
 import io.challenge_workshop.mal_ui.animelist.AnimeListSortOrder
+import io.challenge_workshop.mal_ui.animelist.AnimeListState
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.animelist.LayoutPreference
 import io.challenge_workshop.mal_ui.animelist.MY_ANIME_LIST_URL
@@ -59,7 +57,6 @@ import io.challenge_workshop.mal_ui.auth.ANIME_LIST_SKELETON_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_SORT_MENU_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_SORT_TAG
 import io.challenge_workshop.mal_ui.auth.ANIME_LIST_TAG
-import io.challenge_workshop.mal_ui.auth.FAKE_MAL_ANIME_TITLES
 import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListener
 import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListenerTest
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
@@ -71,102 +68,68 @@ import io.challenge_workshop.mal_ui.auth.SESSION_USER_NAME_TAG
 import io.challenge_workshop.mal_ui.auth.SIGNED_OUT_REASON_TAG
 import io.challenge_workshop.mal_ui.auth.SessionScreenTag
 import io.challenge_workshop.mal_ui.auth.StartupRedirect
-import io.challenge_workshop.mal_ui.auth.rememberAuthRedirectChannel
-import io.challenge_workshop.mal_ui.auth.screenActions
-import io.challenge_workshop.mal_ui.screen.ScreenStateSource
 import io.challenge_workshop.mal_ui.auth.awaitLoopbackPortFree
 import io.challenge_workshop.mal_ui.auth.fakeMal
 import io.challenge_workshop.mal_ui.mal.DESKTOP_LOOPBACK_PORT
 import io.challenge_workshop.mal_ui.mal.DESKTOP_REDIRECT_URI
 import io.challenge_workshop.mal_ui.mal.MalAuthConfig
-import io.challenge_workshop.mal_ui.mal.MalTokens
 import io.challenge_workshop.mal_ui.mal.MalUser
+import io.challenge_workshop.mal_ui.screen.ScreenState
+import io.challenge_workshop.mal_ui.screen.SignInForm
 import io.challenge_workshop.mal_ui.session.FakeKeyValueStore
 import io.challenge_workshop.mal_ui.session.JsonTokenStore
 import io.challenge_workshop.mal_ui.session.MalSessionRepository
-import io.challenge_workshop.mal_ui.session.PendingAuthorization
+import io.challenge_workshop.mal_ui.session.SessionDiagnostics
 import io.challenge_workshop.mal_ui.session.SessionState
-import io.challenge_workshop.mal_ui.session.SignedOutReason
-import io.ktor.client.request.HttpRequestData
-import io.ktor.http.Url
 import java.util.Collections
-import kotlin.test.AfterTest
-import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 
 /**
- * The routing `when` in [App], rendered for real.
+ * Every screen this app draws, rendered for real from a [ScreenState] literal.
  *
- * Exhaustiveness over `SessionState` is already a compiler guarantee, but "compiles" is not
- * "renders something" — a branch could route to a composable that draws nothing, and the tagged
- * screen roots all `fillMaxSize()`, so their mere presence proves nothing. Every branch is therefore
- * checked for *content*, not just for its tag.
+ * **What is left here is what genuinely needs a rendered tree.** Everything expressible as a value —
+ * which screen a Session produces, which of the five Anime List states a page load is in, what the
+ * four Signed Out Reasons say, what goes into the authorization URL — moved to
+ * `ScreenStateSourceTest` in `:core`, where it runs on all four Targets instead of only on jvm. What
+ * a control *causes* belongs to the ViewModel and pager tests, which are also in `:core`. So the
+ * assertions below are about pixels, semantics and clicks: that a state draws *something*, that the
+ * something is what a person can read, and that the control they tap is wired to the right action.
+ *
+ * Exhaustiveness over `ScreenState` is already a compiler guarantee, but "compiles" is not "renders
+ * something" — a branch could route to a composable that draws nothing, and the tagged screen roots
+ * all `fillMaxSize()`, so their mere presence proves nothing. That gap is the whole reason this file
+ * still exists.
  *
  * JVM-only, deliberately. [SessionRoute] is common code with no `expect`/`actual` in it, so running
- * it on a second target would re-test Compose rather than this app. The web and Android targets
- * would each need their own test harness — karma and Robolectric — to prove nothing this module
- * owns.
+ * it on a second Target would re-test Compose rather than this app: the web and Android Targets would
+ * each need their own harness — karma and Robolectric — to prove nothing this module owns. The
+ * *mapping* is what reaches four Targets, and it does.
  */
 class SessionRouteTest {
 
-    private lateinit var store: JsonTokenStore
-    private lateinit var repository: MalSessionRepository
-    private lateinit var viewModel: MalSessionViewModel
-    private lateinit var animeList: AnimeListViewModel
-
-    @BeforeTest
-    fun setUp() {
-        // viewModelScope runs on Dispatchers.Main, which the JVM test platform does not provide.
-        Dispatchers.setMain(UnconfinedTestDispatcher())
-        store = JsonTokenStore(FakeKeyValueStore())
-        repository = MalSessionRepository(
-            store,
-            initialConfig = MalAuthConfig(clientId = "a-client-id"),
-            // Not the default factory: the signed-in screen loads the Anime List as soon as it is
-            // composed, and a unit test must not make that a real request to myanimelist.net.
-            clientFactory = fakeMal(),
-        )
-        viewModel = MalSessionViewModel(repository, StartupRedirect.None)
-        animeList = animeListViewModel(repository)
-    }
-
-    @AfterTest
-    fun tearDown() {
-        repository.close()
-        Dispatchers.resetMain()
-        // This target's channel binds a real port, and only cancelling releases it. Leaving one
-        // armed would break every later test that needs 18040 — and, in the app, the next sign-in.
-        assertTrue(
-            awaitLoopbackPortFree(),
-            "Port $DESKTOP_LOOPBACK_PORT was left bound by this test.",
-        )
-    }
-
     /**
-     * One case per `SessionState` subtype. [every_session_state_is_covered_by_this_test] holds this
-     * list to the sealed interface, so adding a state without adding a case here fails.
+     * One case per [ScreenState] variant. [every_screen_state_is_covered_by_this_test] holds this
+     * list to the sealed interface, so adding a variant without adding a case here fails.
      */
-    private val cases: List<Pair<SessionState, SessionScreenTag>> = listOf(
-        SessionState.Restoring to SessionScreenTag.Restoring,
-        SessionState.SignedOut(SignedOutReason.NeverSignedIn) to SessionScreenTag.SignIn,
-        SessionState.Authorizing(pendingAuthorization()) to SessionScreenTag.Authorizing,
-        SessionState.SignedIn(MalUser(1, "someone")) to SessionScreenTag.SignedIn,
+    private val cases: List<Pair<ScreenState, SessionScreenTag>> = listOf(
+        ScreenState.Restoring to SessionScreenTag.Restoring,
+        signedOut() to SessionScreenTag.SignIn,
+        authorizing() to SessionScreenTag.Authorizing,
+        signedIn() to SessionScreenTag.SignedIn,
     )
 
     @Test
-    fun every_session_state_renders_one_screen_with_something_on_it() {
+    fun every_screen_state_renders_one_screen_with_something_on_it() {
         for ((state, expected) in cases) {
             runComposeUiTest {
-                setContent { RouteAt(state, animeList) }
+                setContent { SessionRoute(state, RecordedActions().actions) }
 
                 onNodeWithTag(expected.tag).assertIsDisplayed()
                 for (other in SessionScreenTag.entries - expected) {
@@ -185,144 +148,222 @@ class SessionRouteTest {
         }
     }
 
+    /**
+     * A [ScreenState] variant that nobody draws fails here.
+     *
+     * Against `sealedSubclasses` and against [SessionScreenTag] both, because the two failures are
+     * different: a variant with no case is one nothing proves anything about, and a variant with no
+     * tag is one no test could find on screen.
+     */
     @Test
-    fun every_session_state_is_covered_by_this_test() {
+    fun every_screen_state_is_covered_by_this_test() {
         assertEquals(
-            SessionState::class.sealedSubclasses.map { it.simpleName }.toSet(),
+            ScreenState::class.sealedSubclasses.map { it.simpleName }.toSet(),
             cases.map { (state, _) -> state::class.simpleName }.toSet(),
-            "A SessionState subtype has no case in this test, so nothing proves it renders anything.",
+            "A ScreenState variant has no case in this test, so nothing proves it renders anything.",
         )
-    }
-
-    @Test
-    fun each_signed_out_reason_explains_itself_differently() {
-        val explanations = SignedOutReason.entries.associateWith { reason ->
-            var text = ""
-            runComposeUiTest {
-                setContent { RouteAt(SessionState.SignedOut(reason), animeList) }
-                text = onNodeWithTag(SIGNED_OUT_REASON_TAG).textContent()
-            }
-            text
-        }
-
         assertEquals(
-            SignedOutReason.entries.size,
-            explanations.values.toSet().size,
-            "Two reasons share the same copy, which is the bare 'signed out' this enum exists to " +
-                "avoid: $explanations",
-        )
-        // The one the spec names: an expired session must not read like a deliberate sign-out.
-        assertTrue(
-            "expired" in explanations.getValue(SignedOutReason.RefreshRejected).lowercase(),
-            explanations.getValue(SignedOutReason.RefreshRejected),
+            cases.size,
+            SessionScreenTag.entries.size,
+            "Every ScreenState variant gets one tagged screen, and no tag is left over.",
         )
     }
+
+    // --- The sign-in screen ---------------------------------------------------------------------
 
     /**
      * The seam the channel abstraction rests on, exercised for real: `rememberAuthRedirectChannel()`
-     * resolves to this target's actual — a [LoopbackRedirectListener] that binds 18040 — the click
-     * reaches the ViewModel through it, and the browser is opened by the *channel* rather than by
-     * the screen. Paste-the-code stays on offer throughout regardless.
+     * resolves to this Target's actual — a [LoopbackRedirectListener] that binds 18040 — the click
+     * reaches the ViewModel through it, and the browser is opened by the *channel* rather than by the
+     * screen. Paste-the-code stays on offer throughout regardless.
      *
-     * Routed off the live state rather than a fixed one, because the transition to `Authorizing` is
-     * half of what is being checked.
+     * **The one case in this file that still builds the whole stack**, and the reason it does is that
+     * the stack *is* what is being asserted. Everything else here renders a literal, so this one owns
+     * its `Dispatchers.setMain`, its repository and its port check rather than making every other
+     * case pay for them in a `@BeforeTest`.
+     *
+     * Rendered through [AppScreen] rather than [SessionRoute], because the channel and the actions
+     * record are exactly what that layer wires: a [SessionRoute] given a literal would prove the
+     * screen draws and nothing about the capture.
      *
      * The waits are real. Arming binds a socket off the main dispatcher and the browser launch runs
-     * off it too, so nothing here completes inside `performClick` any more.
+     * off it too, so nothing here completes inside `performClick`.
      *
-     * What the listener then does with a redirect is [LoopbackRedirectListenerTest]'s; this test
-     * only proves the wiring reaches it.
+     * What the listener then does with a redirect is [LoopbackRedirectListenerTest]'s; this test only
+     * proves the wiring reaches it.
      */
     @Test
     fun signing_in_arms_this_targets_capture_and_still_offers_paste_the_code() {
+        // viewModelScope runs on Dispatchers.Main, which the JVM test platform does not provide.
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        val store = JsonTokenStore(FakeKeyValueStore())
+        val repository = MalSessionRepository(
+            store,
+            initialConfig = MalAuthConfig(clientId = "a-client-id"),
+            // Not the default factory: the signed-in screen loads the Anime List as soon as it is
+            // composed, and a unit test must not make that a real request to myanimelist.net.
+            clientFactory = fakeMal(),
+        )
+        val viewModel = MalSessionViewModel(repository, StartupRedirect.None)
+        val animeList = AnimeListViewModel(
+            repository,
+            LayoutPreference(store, CoroutineScope(Dispatchers.Unconfined)),
+        )
         val opened = Collections.synchronizedList(mutableListOf<String>())
-        runComposeUiTest {
-            setContent {
-                // Otherwise the desktop `UriHandler` really does launch a browser from a unit test.
-                CompositionLocalProvider(LocalUriHandler provides RecordingUriHandler(opened)) {
-                    // The whole adapter, not just the routing: this is the one case that is about the
-                    // real seam, so it needs the channel `AppScreen` binds and the live Session state.
-                    AppScreen(viewModel, animeList)
+        try {
+            runComposeUiTest {
+                setContent {
+                    // Otherwise the desktop `UriHandler` really does launch a browser from a unit
+                    // test.
+                    CompositionLocalProvider(LocalUriHandler provides RecordingUriHandler(opened)) {
+                        AppScreen(viewModel, animeList)
+                    }
+                }
+
+                onNodeWithText("Sign in with MyAnimeList").performClick()
+                waitUntil("the sign-in reaches Authorizing", WAIT_MS) {
+                    repository.state.value is SessionState.Authorizing
+                }
+
+                val state = repository.state.value as SessionState.Authorizing
+                assertEquals(DESKTOP_REDIRECT_URI, state.pending.redirectUri)
+                val authorizationUrl = repository.authorizationUrlFor(state.pending)
+                waitUntil("the channel opens the browser", WAIT_MS) {
+                    opened.toList() == listOf(authorizationUrl)
+                }
+
+                // Paste-the-code stays reachable throughout: the URL is on screen to copy by hand,
+                // since no platform's browser-opening call reliably reports whether it worked.
+                onNodeWithTag(SessionScreenTag.Authorizing.tag).assertIsDisplayed()
+                onNodeWithText(authorizationUrl).assertIsDisplayed()
+                onNodeWithText("Redirect URL or authorization code").assertIsDisplayed()
+
+                // Not tidying up: cancelling is the *only* thing that gives 18040 back, and a test
+                // that walked away from an armed listener would make the next sign-in — here or in
+                // the app — fail to arm. The port check below holds this to it.
+                onNodeWithText("Cancel").performClick()
+                waitUntil("cancelling leaves Authorizing", WAIT_MS) {
+                    repository.state.value !is SessionState.Authorizing
                 }
             }
-
-            onNodeWithText("Sign in with MyAnimeList").performClick()
-            waitUntil("the sign-in reaches Authorizing", WAIT_MS) {
-                repository.state.value is SessionState.Authorizing
-            }
-
-            val state = repository.state.value as SessionState.Authorizing
-            assertEquals(DESKTOP_REDIRECT_URI, state.pending.redirectUri)
-            val authorizationUrl = repository.authorizationUrlFor(state.pending)
-            waitUntil("the channel opens the browser", WAIT_MS) {
-                opened.toList() == listOf(authorizationUrl)
-            }
-
-            // Paste-the-code stays reachable throughout: the URL is on screen to copy by hand, since
-            // no platform's browser-opening call reliably reports whether it worked.
-            onNodeWithTag(SessionScreenTag.Authorizing.tag).assertIsDisplayed()
-            onNodeWithText(authorizationUrl).assertIsDisplayed()
-            onNodeWithText("Redirect URL or authorization code").assertIsDisplayed()
-
-            // Not tidying up: cancelling is the *only* thing that gives 18040 back, and a test that
-            // walked away from an armed listener would make the next sign-in — here or in the app —
-            // fail to arm. [tearDown] holds this to it.
-            onNodeWithText("Cancel").performClick()
-            waitUntil("cancelling leaves Authorizing", WAIT_MS) {
-                repository.state.value !is SessionState.Authorizing
-            }
+        } finally {
+            clear(animeList)
+            repository.close()
+            Dispatchers.resetMain()
+            assertTrue(
+                awaitLoopbackPortFree(),
+                "Port $DESKTOP_LOOPBACK_PORT was left bound by this test.",
+            )
         }
     }
 
     /**
+     * The Signed Out Reason is on screen, in a node of its own, so a person reads why rather than a
+     * bare "signed out".
+     *
+     * That the four reasons *differ from each other* is `ScreenStateSourceTest`'s, on four Targets —
+     * it is a comparison between four strings, and it needed a rendered tree only for as long as the
+     * copy was built inside a composable. What is left here is that the screen draws whichever one it
+     * is handed, which no value can say.
+     */
+    @Test
+    fun the_sign_in_screen_shows_the_signed_out_reason_it_is_given() {
+        val state = signedOut()
+        runComposeUiTest {
+            setContent { SessionRoute(state, RecordedActions().actions) }
+
+            assertEquals(state.explanation, onNodeWithTag(SIGNED_OUT_REASON_TAG).textContent())
+        }
+    }
+
+    /** The Client ID field is the source of truth for the Client ID, and it reaches the ViewModel. */
+    @Test
+    fun the_client_id_field_reports_what_is_typed_into_it() {
+        val actions = RecordedActions()
+        runComposeUiTest {
+            setContent { SessionRoute(signedOut(), actions.actions) }
+
+            onNodeWithText("a-client-id").performTextReplacement("another-client-id")
+
+            assertEquals(listOf("another-client-id"), actions.clientIds)
+        }
+    }
+
+    // --- The authorizing screen ------------------------------------------------------------------
+
+    /**
      * The authorization URL is the whole of Paste-the-code's first half, and it is long enough that
-     * selecting it out of a text field by hand is where people give up. No platform's
-     * browser-opening call reports failure, so this button is the only guaranteed way to it.
+     * selecting it out of a text field by hand is where people give up. No platform's browser-opening
+     * call reports failure, so this button is the only guaranteed way to it.
      */
     @Test
     fun the_authorization_url_can_be_copied_without_selecting_it() {
         val clipboard = RecordingClipboard()
         runComposeUiTest {
-            val pending = pendingAuthorization()
             @Suppress("DEPRECATION")
             setContent {
                 CompositionLocalProvider(LocalClipboardManager provides clipboard) {
-                    RouteAt(SessionState.Authorizing(pending), animeList)
+                    SessionRoute(authorizing(), RecordedActions().actions)
                 }
             }
 
             onNodeWithText("Copy").performClick()
 
-            assertEquals(repository.authorizationUrlFor(pending), clipboard.getText()?.text)
+            assertEquals(TEST_AUTHORIZATION_URL, clipboard.getText()?.text)
         }
     }
 
     /**
-     * The signed-in branch is the Anime List now, so "it renders something" is no longer enough:
-     * what has to be on screen is the user's own entries, fetched through the repository's
-     * authenticated client. The fetch is real — [fakeMal] answers it — so this covers the whole path
-     * from a MAL response to a card, which is the ticket's tracer bullet.
+     * Paste-the-code's second half: the field and the two buttons beside it.
+     *
+     * Every outcome lands on the same call the platform Redirect Captures funnel into, so what a
+     * paste then does is `MalSessionViewModelRedirectTest`'s — one parser and one set of error
+     * messages, whichever way the redirect arrived. What is left here is that the field reports what
+     * was typed and the two buttons are not wired to each other's action.
+     */
+    @Test
+    fun paste_the_code_reaches_the_view_model() {
+        val actions = RecordedActions()
+        val pasted = "$DESKTOP_REDIRECT_URI?code=the-code&state=a-state"
+        runComposeUiTest {
+            setContent {
+                SessionRoute(
+                    authorizing(form = SignInForm(clientId = "a-client-id", pastedRedirect = "half a")),
+                    actions.actions,
+                )
+            }
+
+            onNodeWithText("half a").performTextReplacement(pasted)
+            onNodeWithText("Complete sign-in").performClick()
+            onNodeWithText("Cancel").performClick()
+
+            // First, not only: the field is a controlled input over a literal here, so the value it
+            // is handed never changes and Compose re-reports the old one behind the new.
+            assertEquals(pasted, actions.pastes.first())
+            assertEquals(
+                listOf("completeSignIn", "cancelSignIn"),
+                actions.clicks().filterNot { it == "pastedRedirectChange" },
+            )
+        }
+    }
+
+    // --- The signed-in screen: the Anime List ----------------------------------------------------
+
+    /**
+     * The signed-in branch **is** the Anime List, so "it renders something" is not enough: what has
+     * to be on screen is the user's own entries.
      *
      * Every fact the spec asks a List Entry to carry is asserted, because they arrive from three
      * different places in MAL's response — the anime, the user's `list_status`, and a field MAL is
      * free to omit — and a card that quietly lost one would still render.
-     *
-     * Cover art itself is not asserted and [fakeMal] deliberately sends no `main_picture`: fetching
-     * one is Coil's job over a real network, which a unit test must not do. What that leaves on
-     * screen is the placeholder path, which is the case the spec cares most about anyway — MAL omits
-     * the field for entries whose art it has none of.
      */
     @Test
     fun the_signed_in_screen_renders_the_anime_list() {
         runComposeUiTest {
-            setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), animeList) }
-
-            waitUntil("the first page lands", WAIT_MS) {
-                animeList.state.value.entries.size == FAKE_MAL_ANIME_TITLES.size
-            }
+            setContent { SessionRoute(signedIn(), RecordedActions().actions) }
 
             onNodeWithTag(ANIME_LIST_TAG).assertIsDisplayed()
-            for (title in FAKE_MAL_ANIME_TITLES) {
+            for (title in FIXTURE_TITLES) {
                 onNodeWithText(title).assertIsDisplayed()
             }
             // Watched-of-total and the user's own score share a line on a card, so this one node
@@ -337,11 +378,28 @@ class SessionRouteTest {
     }
 
     /**
+     * The first page is asked for by the screen once it exists, and not by the ViewModel's `init`.
+     *
+     * The pager must only ask MAL for a list once there is a signed-in screen to show one on, and
+     * this effect is the only thing that says so.
+     */
+    @Test
+    fun the_signed_in_screen_asks_for_the_first_page_when_it_appears() {
+        val actions = RecordedActions()
+        runComposeUiTest {
+            setContent { SessionRoute(signedIn(list = AnimeListState()), actions.actions) }
+
+            assertEquals(listOf("loadFirstPage"), actions.calls)
+        }
+    }
+
+    /**
      * Toggling to the dense Layout re-draws the List Entries that are already loaded.
      *
-     * Driven by the control rather than by a parameter, because the Layout is a remembered choice
-     * now and the toggle is the only thing that sets it — a test that reached past the control
-     * would prove the dense rendering exists without proving anyone can get to it.
+     * Driven by the control rather than by a parameter, because the toggle is the only thing a user
+     * has — a test that reached past it would prove the dense rendering exists without proving anyone
+     * can get to it. The state is a literal, so the toggle's action is what puts the new Layout back
+     * on screen, which is exactly what `LayoutPreference` does in the app.
      *
      * The same facts as the card, because "the same entries, drawn densely" is the whole claim: a
      * dense row that dropped the Airing Status would be a second, quieter rendering of an entry.
@@ -349,11 +407,12 @@ class SessionRouteTest {
     @Test
     fun toggling_to_the_dense_layout_redraws_the_same_entries() {
         runComposeUiTest {
-            setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), animeList) }
-
-            waitUntil("the first page lands", WAIT_MS) {
-                animeList.state.value.entries.size == FAKE_MAL_ANIME_TITLES.size
+            var layout by mutableStateOf(AnimeListLayout.Cards)
+            val recorded = RecordedActions()
+            val actions = recorded.actions.let {
+                it.copy(signedIn = it.signedIn.copy(onSelectLayout = { chosen -> layout = chosen }))
             }
+            setContent { SessionRoute(signedIn(layout = layout), actions) }
 
             // Cards on a device that has never chosen: the feature was asked for as a grid of cover
             // art, so a first launch opens on the Layout the user would have picked.
@@ -362,11 +421,10 @@ class SessionRouteTest {
             onNodeWithText("List").performClick()
             waitForIdle()
 
-            assertEquals(AnimeListLayout.List, animeList.layout.value)
             onNodeWithText("List").assertIsSelected()
             onNodeWithText("Cards").assertIsNotSelected()
 
-            for (title in FAKE_MAL_ANIME_TITLES) {
+            for (title in FIXTURE_TITLES) {
                 onNodeWithText(title).assertIsDisplayed()
             }
             // A dense row splits what a card joins, so these are three nodes rather than two.
@@ -378,279 +436,240 @@ class SessionRouteTest {
     }
 
     /**
-     * A Layout change is a presentation change: it asks MAL for nothing.
+     * A Layout change asks for a Layout and for nothing else.
      *
-     * The one property that separates this control from the two beside it. The filter row and the
-     * Sort Order menu discard every loaded page and refetch from `offset=0`; the page size is 50 for
-     * both Layouts, so the entries already loaded are the entries the other Layout draws. A toggle
-     * that refetched would cost a user on a slow connection a page for a change of mind about
-     * column count — and would be invisible to every assertion about what is on screen, which is why
-     * this one is on the requests.
+     * The one property that separates this control from the two beside it: the filter row and the
+     * Sort Order menu discard every loaded page and refetch from `offset=0`, while the page size is
+     * 50 for both Layouts, so the entries already loaded are the entries the other Layout draws. That
+     * the pager never hears of a Layout is structural — `AnimeListPager` has no Layout API at all —
+     * so what is left to check is that this toggle is not quietly wired to something that does.
      */
     @Test
-    fun toggling_the_layout_refetches_nothing() {
-        val offsets = Collections.synchronizedList(mutableListOf<String>())
-        val toggled = pagedRepository(onAnimeListRequest = { offsets += it.parameters["offset"].orEmpty() })
-        val toggledList = animeListViewModel(toggled)
-        try {
-            runComposeUiTest {
-                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), toggledList) }
-
-                waitUntil("the first page lands", WAIT_MS) { toggledList.state.value.entries.size == 50 }
-                waitForIdle()
-                assertEquals(listOf("0"), offsets.toList())
-
-                onNodeWithText("List").performClick()
-                waitForIdle()
-                onNodeWithText("Cards").performClick()
-                waitForIdle()
-
-                assertEquals(
-                    listOf("0"),
-                    offsets.toList(),
-                    "a Layout change is presentation only and must not have asked MAL for anything",
-                )
-                assertEquals(
-                    50,
-                    toggledList.state.value.entries.size,
-                    "a Layout change must not have discarded the loaded entries either",
-                )
-            }
-        } finally {
-            toggled.close()
-        }
-    }
-
-    /**
-     * The Layout the user last chose is the Layout the next launch opens on.
-     *
-     * There is no process to restart in a unit test, so the restart is a *second*
-     * [AnimeListViewModel] over the same [JsonTokenStore] — which is exactly what a relaunch is from
-     * the store's point of view, and the only part of a relaunch this behaviour depends on. The
-     * control's own state is asserted alongside the rendering, because a screen that drew dense rows
-     * under a toggle still reading "Cards" is the same bug seen from the other side.
-     */
-    @Test
-    fun the_layout_is_remembered_for_the_next_launch() {
+    fun the_layout_toggle_asks_for_a_layout_and_nothing_else() {
+        val actions = RecordedActions()
         runComposeUiTest {
-            setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), animeList) }
-            waitUntil("the first page lands", WAIT_MS) {
-                animeList.state.value.entries.size == FAKE_MAL_ANIME_TITLES.size
-            }
+            setContent { SessionRoute(signedIn(), actions.actions) }
+
             onNodeWithText("List").performClick()
-            waitForIdle()
-        }
+            onNodeWithText("Cards").performClick()
 
-        val relaunched = animeListViewModel(repository)
-        try {
-            runComposeUiTest {
-                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), relaunched) }
-                waitUntil("the remembered Layout is read back", WAIT_MS) {
-                    relaunched.layout.value == AnimeListLayout.List
-                }
-                waitForIdle()
-
-                onNodeWithText("List").assertIsSelected()
-                // ...and it is the *drawing* that changed, not only the control: the dense row
-                // splits the line a card joins.
-                onNodeWithText("3 / 26").assertIsDisplayed()
-            }
-        } finally {
-            clear(relaunched)
+            assertEquals(listOf("selectLayout", "selectLayout"), actions.clicks())
+            assertEquals(listOf(AnimeListLayout.List, AnimeListLayout.Cards), actions.layouts)
         }
     }
 
     /**
-     * A device that has never chosen opens on cards, and nothing about that is an error.
+     * The five Anime List screen states, each drawing its own part of the screen and none of the
+     * others'.
      *
-     * The store's own default is asserted in `JsonTokenStoreTest`; what this adds is that the screen
-     * reaches it — a read that threw, or one whose absent record surfaced as a failure the screen
-     * had to handle, would show up here and nowhere else.
+     * *Which* state a page load is in is `AnimeListPager`'s and `ScreenStateSourceTest`'s, on four
+     * Targets. What only a rendering can answer is that each reaches a different part of the screen —
+     * collapsing an empty slice into an empty account, or a failed first page into the retry row at
+     * the bottom, is the easiest mistake in this feature and is invisible in the state.
+     *
+     * The two empty states share [ANIME_LIST_EMPTY_TAG] on purpose, so the only way to tell them
+     * apart is the words; that comparison is
+     * [a_filter_that_matches_nothing_names_it_and_offers_a_way_back]'s.
      */
     @Test
-    fun a_device_that_has_never_chosen_a_layout_opens_on_cards() {
-        val fresh = animeListViewModel(repository, store = JsonTokenStore(FakeKeyValueStore()))
-        try {
-            runComposeUiTest {
-                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), fresh) }
-                waitForIdle()
-
-                assertEquals(AnimeListLayout.Cards, fresh.layout.value)
-                onNodeWithText("Cards").assertIsSelected()
-            }
-        } finally {
-            clear(fresh)
-        }
-    }
-
-    /**
-     * Ticket 03's whole point, driven the way a user drives it: by scrolling, not by a button.
-     *
-     * The fake holds 120 entries and pages off the `offset` and `limit` the app actually sends, so
-     * the assertion on the offsets requested is what says **we** drove them — following MAL's
-     * absolute `paging.next` would have gone to api.myanimelist.net and this would not be `[0, 50,
-     * 100]`. Scrolling to the last loaded entry is what the proximity trigger reads, and the third
-     * page arrives without a `paging.next`, which is what has to stop it asking.
-     */
-    @Test
-    fun scrolling_to_the_end_loads_the_next_page_until_the_list_is_exhausted() {
-        val offsets = Collections.synchronizedList(mutableListOf<String>())
-        val paged = pagedRepository(onAnimeListRequest = { offsets += it.parameters["offset"].orEmpty() })
-        val pagedList = animeListViewModel(paged)
-        try {
-            runComposeUiTest {
-                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), pagedList) }
-
-                waitUntil("the first page lands", WAIT_MS) { pagedList.state.value.entries.size == 50 }
-                waitForIdle()
-                assertEquals(
-                    listOf("0"),
-                    offsets.toList(),
-                    "a first page that has not been scrolled past must not have fetched a second",
-                )
-
-                scrollToLastLoadedEntry(pagedList)
-                waitUntil("scrolling near the end fetches the second page", WAIT_MS) {
-                    pagedList.state.value.entries.size == 100
-                }
-
-                scrollToLastLoadedEntry(pagedList)
-                waitUntil("and the third", WAIT_MS) { pagedList.state.value.entries.size == 120 }
-
-                assertTrue(
-                    pagedList.state.value.exhausted,
-                    "the last page carried no `paging.next`, so the pager must stop asking",
-                )
-                // Still at the bottom of an exhausted list: the trigger keeps firing and must cost
-                // nothing. Scrolling again is exactly what a user parked at the end does.
-                scrollToLastLoadedEntry(pagedList)
-                waitForIdle()
-                onNodeWithText("Anime 120").assertIsDisplayed()
-                assertEquals(
-                    listOf("0", "50", "100"),
-                    offsets.toList(),
-                    "offsets are driven from our side, once each, and stop at the true end",
-                )
-            }
-        } finally {
-            paged.close()
-        }
-    }
-
-    /**
-     * The other half of an unbounded list: the page that fails on the way down.
-     *
-     * Everything already loaded has to stay exactly where it is — losing 50 entries and the user's
-     * place to a flaky network is the failure this screen state exists to prevent — and the retry
-     * at the bottom has to work, because `AnimeListPager.next()` will not re-request a page that
-     * failed. Without that button a scroll trigger that has given up is a dead end.
-     */
-    @Test
-    fun a_page_that_fails_mid_scroll_keeps_the_list_and_offers_a_retry_that_works() {
-        var failing = true
-        val flaky = pagedRepository(failAnimeListAt = { offset -> offset == 50 && failing })
-        val flakyList = animeListViewModel(flaky)
-        try {
-            runComposeUiTest {
-                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), flakyList) }
-                waitUntil("the first page lands", WAIT_MS) { flakyList.state.value.entries.size == 50 }
-
-                scrollToLastLoadedEntry(flakyList)
-                waitUntil("the second page fails", WAIT_MS) { flakyList.state.value.moreError != null }
-
-                assertEquals(
-                    50,
-                    flakyList.state.value.entries.size,
-                    "a failure at the bottom must not discard what is already loaded",
-                )
-                onNodeWithTag(ANIME_LIST_MORE_TAG).assertIsDisplayed()
-
-                failing = false
-                // Fully into view first: the row is at the very bottom, and a click aimed at a node
-                // that is only half on screen lands outside the window. Scrolling here is safe —
-                // the trigger fires and `next()` refuses, which is the guard this ticket added.
-                onNodeWithTag(ANIME_LIST_TAG).performScrollToNode(hasTestTag(ANIME_LIST_MORE_TAG))
-                onNodeWithText("Try again").performClick()
-
-                waitUntil("the retry lands the page that failed", WAIT_MS) {
-                    flakyList.state.value.entries.size == 100
-                }
-                onNodeWithTag(ANIME_LIST_MORE_TAG).assertDoesNotExist()
-            }
-        } finally {
-            flaky.close()
-        }
-    }
-
-    /**
-     * Ticket 04, end to end: the chip reaches MAL's `status` parameter, the answer replaces the
-     * list, and the list comes back to the top.
-     *
-     * The two slices are given different titles deliberately — a fake that served the same entries
-     * under every filter could not tell "the filter reached MAL" from "the chip did nothing". The
-     * scroll matters for the same reason: the assertion that `Episode 1` is *displayed* is only
-     * meaningful because the screen was 100 entries down a different list when the chip was tapped,
-     * and the replacement is far too long to fit on screen.
-     */
-    @Test
-    fun choosing_a_watch_status_refetches_that_slice_and_returns_to_the_top() {
-        val requests = Collections.synchronizedList(mutableListOf<Url>())
-        val filtered = pagedRepository(
-            animeListTitles = { url ->
-                if (url.parameters["status"] == "watching") (1..60).map { "Episode $it" }
-                else (1..120).map { "Anime $it" }
-            },
-            onAnimeListRequest = { requests += it },
+    fun each_anime_list_state_draws_its_own_part_of_the_screen() {
+        val states = listOf(
+            ANIME_LIST_SKELETON_TAG to AnimeListState(loadingFirstPage = true),
+            ANIME_LIST_EMPTY_TAG to AnimeListState(loaded = true, exhausted = true),
+            ANIME_LIST_ERROR_TAG to AnimeListState(firstPageError = "MAL said no"),
+            ANIME_LIST_MORE_TAG to loadedList(moreError = "MAL said no", exhausted = false),
         )
-        val filteredList = animeListViewModel(filtered)
-        try {
+
+        for ((expected, list) in states) {
             runComposeUiTest {
-                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), filteredList) }
+                setContent { SessionRoute(signedIn(list = list), RecordedActions().actions) }
 
-                waitUntil("the unfiltered first page lands", WAIT_MS) {
-                    filteredList.state.value.entries.size == 50
+                // `onAllNodesWithTag`, because the skeleton is one tagged placeholder per grid cell
+                // rather than one tagged wrapper — which is what lets the grid lay the placeholders
+                // out at the very column width the cards replacing them will get.
+                assertTrue(
+                    onAllNodesWithTag(expected).fetchSemanticsNodes().isNotEmpty(),
+                    "$list drew nothing tagged $expected",
+                )
+                for ((other, _) in states.filterNot { it.first == expected }) {
+                    onAllNodesWithTag(other).assertCountEquals(0)
                 }
-                // Exactly one chip is active, and on launch it is All — the whole list rather than
-                // an arbitrary slice of it.
-                onNodeWithText("All").assertIsSelected()
-                for (other in listOf("Watching", "Completed", "On hold", "Dropped", "Plan to watch")) {
-                    onNodeWithText(other).assertIsNotSelected()
+            }
+        }
+    }
+
+    /**
+     * An empty account is not a broken app, and the fix for it is not in this app at all — which is
+     * why it comes with a way out to myanimelist.net.
+     */
+    @Test
+    fun an_empty_anime_list_says_so_and_points_at_myanimelist() {
+        val opened = mutableListOf<String>()
+        runComposeUiTest {
+            setContent {
+                CompositionLocalProvider(LocalUriHandler provides RecordingUriHandler(opened)) {
+                    SessionRoute(
+                        signedIn(list = AnimeListState(loaded = true, exhausted = true)),
+                        RecordedActions().actions,
+                    )
+                }
+            }
+
+            assertTrue(
+                onNodeWithTag(ANIME_LIST_EMPTY_TAG).textContent().contains("nothing on your MyAnimeList"),
+                "an empty account must be told it is empty, not left with a blank screen",
+            )
+
+            onNodeWithText("Open myanimelist.net").performClick()
+
+            assertEquals(listOf(MY_ANIME_LIST_URL), opened)
+        }
+    }
+
+    /**
+     * The pair this spec is easiest to collapse by accident: an empty *slice* is a filter to undo,
+     * and saying "your list is empty" to a user with four hundred completed shows is a false
+     * statement about their account.
+     *
+     * So the message names the filter, and the way out is one tap — and that tap is the same gesture
+     * as the All chip, so it goes through the same action rather than becoming a second way of
+     * changing filter.
+     */
+    @Test
+    fun a_filter_that_matches_nothing_names_it_and_offers_a_way_back() {
+        val actions = RecordedActions()
+        runComposeUiTest {
+            setContent {
+                SessionRoute(
+                    signedIn(list = AnimeListState(loaded = true, exhausted = true, watchStatus = WatchStatus.OnHold)),
+                    actions.actions,
+                )
+            }
+
+            assertEquals(
+                "Nothing on hold.",
+                onNodeWithTag(ANIME_LIST_EMPTY_TAG).textContent(),
+                "the message must name the filter rather than report an empty account",
+            )
+
+            onNodeWithText("Show all").performClick()
+
+            assertEquals(listOf("selectWatchStatus"), actions.clicks())
+            assertEquals(listOf<WatchStatus?>(null), actions.watchStatuses)
+        }
+    }
+
+    /**
+     * Both retries, which are the way out of both failures.
+     *
+     * `AnimeListPager.next()` will not re-request a page that failed, so without these buttons a
+     * scroll trigger that has given up is a dead end. What a retry then *does* — which offset it
+     * re-requests, and what it keeps — is the pager's, on four Targets.
+     */
+    @Test
+    fun both_failures_offer_a_retry_that_reaches_the_pager() {
+        val failures = listOf(
+            "Retry" to AnimeListState(firstPageError = "MAL said no"),
+            "Try again" to loadedList(moreError = "MAL said no", exhausted = false),
+        )
+        for ((label, list) in failures) {
+            val actions = RecordedActions()
+            runComposeUiTest {
+                setContent { SessionRoute(signedIn(list = list), actions.actions) }
+
+                // Fully into view first: the later-page row is below the entries, and a click aimed
+                // at a node that is only half on screen lands outside the window.
+                onNodeWithTag(ANIME_LIST_TAG).performScrollToNode(hasText(label))
+                onNodeWithText(label).performClick()
+
+                // `loadMore` filtered out rather than asserted against: the retry row sits at the
+                // bottom, so scrolling to it enters the prefetch zone and the trigger fires. That it
+                // costs nothing is the pager's guard, on four Targets — `next()` refuses while a
+                // page is showing its error.
+                assertEquals(listOf("retry"), actions.clicks().filterNot { it == "loadMore" }, label)
+            }
+        }
+    }
+
+    /**
+     * A failure at the bottom keeps every entry exactly where it was — losing 50 entries and the
+     * user's place to a flaky network is the failure this screen state exists to prevent.
+     */
+    @Test
+    fun a_page_that_fails_mid_scroll_keeps_the_list_on_screen() {
+        runComposeUiTest {
+            setContent {
+                SessionRoute(
+                    signedIn(list = loadedList(moreError = "MAL said no", exhausted = false)),
+                    RecordedActions().actions,
+                )
+            }
+
+            for (title in FIXTURE_TITLES) {
+                onNodeWithText(title).assertIsDisplayed()
+            }
+            onNodeWithTag(ANIME_LIST_MORE_TAG).assertIsDisplayed()
+        }
+    }
+
+    /**
+     * Paging is driven by proximity to the end of the list rather than by a button, so the trigger is
+     * a scroll and nothing else.
+     *
+     * Which offsets that then produces is `AnimeListPagerTest`'s, on four Targets. What only a
+     * rendering can show is that scrolling reaches the trigger at all — and that an exhausted list
+     * costs nothing at its bottom, which is exactly where a user parks.
+     */
+    @Test
+    fun scrolling_near_the_end_asks_for_the_next_page_unless_the_list_is_exhausted() {
+        val many = (1..60).map { "Anime $it" }
+        for ((exhausted, expected) in listOf(false to listOf("loadMore"), true to emptyList())) {
+            val actions = RecordedActions()
+            runComposeUiTest {
+                setContent {
+                    SessionRoute(
+                        signedIn(list = loadedList(titles = many, exhausted = exhausted)),
+                        actions.actions,
+                    )
                 }
 
-                scrollToLastLoadedEntry(filteredList)
-                waitUntil("a second page of the whole list lands", WAIT_MS) {
-                    filteredList.state.value.entries.size == 100
-                }
-
-                // A hundred entries down, and still on screen: the row is a sibling of the list
-                // rather than an item in it, precisely so it does not scroll out of reach.
-                onNodeWithTag(ANIME_LIST_FILTERS_TAG).assertIsDisplayed()
-
-                onNodeWithText("Watching").performClick()
-
-                waitUntil("the filtered first page replaces it", WAIT_MS) {
-                    filteredList.state.value.entries.size == 50 &&
-                        filteredList.state.value.entries.first().title == "Episode 1"
-                }
+                onNodeWithTag(ANIME_LIST_TAG).performScrollToIndex(many.size)
                 waitForIdle()
 
-                assertEquals(
-                    listOf(null to "0", null to "50", "watching" to "0"),
-                    requests.map { it.parameters["status"] to it.parameters["offset"] },
-                    "All sends no `status` at all, the chip sends exactly one value, and the new " +
-                        "list is fetched from its own start — with nothing prefetched off the " +
-                        "scroll position the old list was left at",
-                )
-                // Scrolled back to the top of a list far longer than the window, so this is only
-                // on screen if the swap took the old scroll position with it.
-                onNodeWithText("Episode 1").assertIsDisplayed()
-                onNodeWithText("Anime 1").assertDoesNotExist()
-                // Still exactly one, and now the one that was tapped.
-                onNodeWithText("Watching").assertIsSelected()
-                onNodeWithText("All").assertIsNotSelected()
+                assertEquals(expected, actions.clicks().distinct(), "exhausted=$exhausted")
             }
-        } finally {
-            filtered.close()
+        }
+    }
+
+    /**
+     * The replacement page has landed, so the content under the user's scroll position has been
+     * swapped out and that position is into a list that no longer exists.
+     *
+     * Keyed on the pager's revision rather than on the filter, because the scroll has to happen when
+     * the new page *arrives* — the old entries are deliberately still on screen in between. A user
+     * who changed filter from the bottom of a long list and stayed there would be at the bottom of
+     * the new one, which is where the paging trigger fires and fetches a page nobody scrolled to.
+     */
+    @Test
+    fun a_replacement_page_returns_the_list_to_the_top() {
+        val many = (1..60).map { "Anime $it" }
+        runComposeUiTest {
+            var revision by mutableStateOf(0)
+            setContent {
+                SessionRoute(
+                    signedIn(list = loadedList(titles = many, revision = revision)),
+                    RecordedActions().actions,
+                )
+            }
+
+            onNodeWithTag(ANIME_LIST_TAG).performScrollToIndex(many.size)
+            waitForIdle()
+            onNodeWithText("Anime 1").assertDoesNotExist()
+
+            revision = 1
+            waitForIdle()
+
+            onNodeWithText("Anime 1").assertIsDisplayed()
         }
     }
 
@@ -658,112 +677,90 @@ class SessionRouteTest {
      * The window between the tap and the replacement, which is the whole reason the pager keeps the
      * old entries: a grid that empties to a spinner on every tap reads as broken.
      *
-     * The filter row has to be disabled through it as well — the entries on screen are the *old*
-     * filter's, so a row that still looked live would be inviting a second tap against a list that
-     * has not changed yet.
+     * The filter row and the Sort Order have to be disabled through it as well — the entries on
+     * screen are the *old* query's, so a live control would be inviting a second pick against a list
+     * that has not changed yet. The Layout toggle deliberately stays live; it asks MAL for nothing.
      */
     @Test
-    fun the_previous_entries_stay_on_screen_with_the_filters_disabled_until_the_replacement_lands() {
-        val releaseFilteredPage = CompletableDeferred<Unit>()
-        val holding = pagedRepository(
-            animeListTitles = { url ->
-                if (url.parameters["status"] == null) (1..120).map { "Anime $it" } else listOf("Episode 1")
-            },
-            holdAnimeList = { request ->
-                if (request.url.parameters["status"] != null) releaseFilteredPage.await()
-            },
-        )
-        val holdingList = animeListViewModel(holding)
-        try {
-            runComposeUiTest {
-                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), holdingList) }
-                waitUntil("the unfiltered first page lands", WAIT_MS) {
-                    holdingList.state.value.entries.size == 50
-                }
-
-                onNodeWithText("Completed").performClick()
-                waitUntil("the replacement page is in flight", WAIT_MS) {
-                    holdingList.state.value.loadingFirstPage
-                }
-                waitForIdle()
-
-                onNodeWithText("Anime 1").assertIsDisplayed()
-                for (filter in listOf("All", "Watching", "Completed")) {
-                    onNodeWithText(filter).assertIsNotEnabled()
-                }
-
-                releaseFilteredPage.complete(Unit)
-                waitUntil("the replacement lands", WAIT_MS) {
-                    holdingList.state.value.entries.map { it.title } == listOf("Episode 1")
-                }
-                waitForIdle()
-
-                onNodeWithText("Anime 1").assertDoesNotExist()
-                onNodeWithText("All").assertIsEnabled()
+    fun the_previous_entries_stay_on_screen_with_the_controls_disabled_until_the_replacement_lands() {
+        runComposeUiTest {
+            var loading by mutableStateOf(true)
+            setContent {
+                SessionRoute(
+                    signedIn(list = loadedList().copy(loadingFirstPage = loading)),
+                    RecordedActions().actions,
+                )
             }
-        } finally {
-            holding.close()
+
+            onNodeWithText(FIXTURE_TITLES.first()).assertIsDisplayed()
+            for (filter in listOf("All", "Watching", "Completed")) {
+                onNodeWithText(filter).assertIsNotEnabled()
+            }
+            onNodeWithTag(ANIME_LIST_SORT_TAG).assertIsNotEnabled()
+            onNodeWithText("List").assertIsEnabled()
+
+            loading = false
+            waitForIdle()
+
+            onNodeWithText("All").assertIsEnabled()
+            onNodeWithTag(ANIME_LIST_SORT_TAG).assertIsEnabled()
         }
     }
 
     /**
-     * Ticket 05, end to end: the menu entry reaches MAL's `sort` parameter, the re-ordered answer
-     * replaces the list, and the list comes back to the top.
+     * The filter row: exactly one chip active, the tapped one reaches the pager, and the row stays
+     * reachable from wherever the user has scrolled to.
      *
-     * The re-ordered slice is given different titles for the same reason the filter test does — a
-     * fake that served the same entries under every `sort` could not tell "the menu reached MAL"
-     * from "the entry did nothing". Ordering is MAL's job: the list is paged, so nothing here
-     * re-orders what is loaded, and that is also why there is no reverse toggle to click. See
-     * ADR-0003.
+     * That the chip's value reaches MAL's `status` parameter is `AnimeListPagerTest`'s, on four
+     * Targets.
      */
     @Test
-    fun choosing_a_sort_order_refetches_in_that_order_and_returns_to_the_top() {
-        val requests = Collections.synchronizedList(mutableListOf<Url>())
-        val sorted = pagedRepository(
-            animeListTitles = { url ->
-                if (url.parameters["sort"] == "anime_title") (1..60).map { "Alphabetical $it" }
-                else (1..120).map { "Anime $it" }
-            },
-            onAnimeListRequest = { requests += it },
-        )
-        val sortedList = animeListViewModel(sorted)
-        try {
-            runComposeUiTest {
-                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), sortedList) }
+    fun choosing_a_watch_status_selects_exactly_that_chip_and_asks_for_that_slice() {
+        val many = (1..60).map { "Anime $it" }
+        val actions = RecordedActions()
+        runComposeUiTest {
+            setContent { SessionRoute(signedIn(list = loadedList(titles = many)), actions.actions) }
 
-                waitUntil("the first page lands", WAIT_MS) { sortedList.state.value.entries.size == 50 }
-                // The launch default, and it says which way it sorts rather than just naming a field.
-                onNodeWithTag(ANIME_LIST_SORT_TAG).assertTextContains("Last updated (newest first)", substring = true)
-
-                scrollToLastLoadedEntry(sortedList)
-                waitUntil("a second page lands", WAIT_MS) { sortedList.state.value.entries.size == 100 }
-
-                // A hundred entries down, and still on screen: the control is a sibling of the list
-                // rather than an item in it, precisely so it does not scroll out of reach.
-                onNodeWithTag(ANIME_LIST_SORT_TAG).assertIsDisplayed().performClick()
-                onNodeWithText("Title (A–Z)").performClick()
-
-                waitUntil("the re-ordered first page replaces it", WAIT_MS) {
-                    sortedList.state.value.entries.size == 50 &&
-                        sortedList.state.value.entries.first().title == "Alphabetical 1"
-                }
-                waitForIdle()
-
-                assertEquals(
-                    listOf("list_updated_at" to "0", "list_updated_at" to "50", "anime_title" to "0"),
-                    requests.map { it.parameters["sort"] to it.parameters["offset"] },
-                    "the menu sends exactly one `sort` value and the re-ordered list is fetched " +
-                        "from its own start — `offset` counts positions in whichever order the " +
-                        "query names, so carrying the old one would skip the first fifty of it",
-                )
-                // Scrolled back to the top of a list far longer than the window, so this is only on
-                // screen if the swap took the old scroll position with it.
-                onNodeWithText("Alphabetical 1").assertIsDisplayed()
-                onNodeWithText("Anime 1").assertDoesNotExist()
-                onNodeWithTag(ANIME_LIST_SORT_TAG).assertTextContains("Title (A–Z)", substring = true)
+            // On launch it is All — the whole list rather than an arbitrary slice of it.
+            onNodeWithText("All").assertIsSelected()
+            for (other in listOf("Watching", "Completed", "On hold", "Dropped", "Plan to watch")) {
+                onNodeWithText(other).assertIsNotSelected()
             }
-        } finally {
-            sorted.close()
+
+            // Sixty entries down, and still on screen: the row is a sibling of the list rather than
+            // an item in it, precisely so it does not scroll out of reach.
+            onNodeWithTag(ANIME_LIST_TAG).performScrollToIndex(many.size)
+            waitForIdle()
+            onNodeWithTag(ANIME_LIST_FILTERS_TAG).assertIsDisplayed()
+
+            onNodeWithText("Watching").performClick()
+
+            assertEquals(listOf<WatchStatus?>(WatchStatus.Watching), actions.watchStatuses)
+        }
+    }
+
+    /**
+     * The Sort Order control names the ordering it is in — in words that say the *direction*, since
+     * "Score" alone reads as ascending to about half of everyone — and picking another reaches the
+     * pager.
+     */
+    @Test
+    fun choosing_a_sort_order_names_it_and_asks_for_that_ordering() {
+        val many = (1..60).map { "Anime $it" }
+        val actions = RecordedActions()
+        runComposeUiTest {
+            setContent { SessionRoute(signedIn(list = loadedList(titles = many)), actions.actions) }
+
+            onNodeWithTag(ANIME_LIST_SORT_TAG)
+                .assertTextContains("Last updated (newest first)", substring = true)
+
+            // Sixty entries down, and still on screen, for the reason the filter row is.
+            onNodeWithTag(ANIME_LIST_TAG).performScrollToIndex(many.size)
+            waitForIdle()
+            onNodeWithTag(ANIME_LIST_SORT_TAG).assertIsDisplayed().performClick()
+            onNodeWithText("Title (A–Z)").performClick()
+
+            assertEquals(listOf(AnimeListSortOrder.Title), actions.sortOrders)
         }
     }
 
@@ -778,8 +775,7 @@ class SessionRouteTest {
     @Test
     fun the_sort_menu_offers_mals_four_orderings_and_no_direction_toggle() {
         runComposeUiTest {
-            setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), animeList) }
-            waitUntil("the first page lands", WAIT_MS) { animeList.state.value.loaded }
+            setContent { SessionRoute(signedIn(), RecordedActions().actions) }
 
             onNodeWithTag(ANIME_LIST_SORT_TAG).performClick()
             waitForIdle()
@@ -795,24 +791,24 @@ class SessionRouteTest {
         }
     }
 
+    // --- The signed-in screen: the top app bar ---------------------------------------------------
+
     /**
-     * The Anime List taking over the signed-in screen must not cost the things that were on it.
-     * Ticket 09 rehouses them into the top app bar's overflow menu, which is this.
+     * The Anime List taking over the signed-in screen must not cost the things that were on it. The
+     * top app bar's overflow menu is where they went.
      *
      * Asserted on the open menu rather than on the screen, because that is now the only place any of
      * them can be — a "Sign out" that were still lying loose on the screen would pass an assertion
-     * over the whole tree and mean the rehousing never happened.
+     * over the whole tree and mean the rehousing never happened. Two of the three are also clicked,
+     * since entries wired to the same action would pass every assertion about what is *in* the menu;
+     * the third is [session_diagnostics_opens_the_debug_panel_in_a_dialog]'s.
      */
     @Test
     fun the_overflow_menu_carries_reload_sign_out_and_session_diagnostics() {
+        val entries = listOf("Reload", "Sign out", "Session diagnostics")
+        val actions = RecordedActions()
         runComposeUiTest {
-            setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), animeList) }
-
-            waitUntil("the first page lands", WAIT_MS) { animeList.state.value.loaded }
-
-            // One list, so the count asserted below is the count of the entries named above it
-            // rather than a number that can drift away from them.
-            val entries = listOf("Reload", "Sign out", "Session diagnostics")
+            setContent { SessionRoute(signedIn(), actions.actions) }
 
             // None of the three is on the screen itself: they live behind one button.
             for (entry in entries) {
@@ -832,23 +828,32 @@ class SessionRouteTest {
                 "a fourth entry is something the Anime List did not displace, so it belongs on the " +
                     "screen where the user can see it rather than behind a menu",
             )
+
+            // Each entry closes the menu before it acts, so each has to be reopened.
+            onNodeWithText("Reload").performClick()
+            onNodeWithTag(SESSION_MENU_BUTTON_TAG).performClick()
+            onNodeWithText("Sign out").performClick()
+
+            assertEquals(listOf("reload", "signOut"), actions.clicks())
         }
     }
 
     /**
      * The top app bar's whole job besides the menu: say who is signed in.
      *
-     * Measured rather than read, because truncation is not in the semantics tree — an ellipsised
-     * name and a wrapped one both read back as the same string, and a bar that wrapped a long name
-     * would push the list down by however many lines the name happened to need. So the assertion is
-     * that a name nobody could fit takes exactly the height a short one does.
+     * Measured rather than read, because truncation is not in the semantics tree — an ellipsised name
+     * and a wrapped one both read back as the same string, and a bar that wrapped a long name would
+     * push the list down by however many lines the name happened to need. So the assertion is that a
+     * name nobody could fit takes exactly the height a short one does.
      */
     @Test
     fun the_top_app_bar_names_the_user_and_truncates_rather_than_wrapping() {
         fun heightOf(name: String): Dp {
             var height = 0.dp
             runComposeUiTest {
-                setContent { RouteAt(SessionState.SignedIn(MalUser(1, name)), animeList) }
+                setContent {
+                    SessionRoute(signedIn(user = MalUser(1, name)), RecordedActions().actions)
+                }
                 waitForIdle()
                 onNodeWithTag(SESSION_USER_NAME_TAG).assertTextContains(name.take(1), substring = true)
                 height = onNodeWithTag(SESSION_USER_NAME_TAG).getBoundsInRoot().height
@@ -866,82 +871,27 @@ class SessionRouteTest {
     }
 
     /**
-     * A Session refresh is not a navigation. `SessionState.SignedIn` carries `refreshing` precisely
-     * so the screen can say so without being swapped out, and a list that unmounted for it would
-     * lose every page the user has scrolled through.
+     * A Session refresh is not a navigation. `ScreenState.SignedIn` carries `refreshing` precisely so
+     * the screen can say so without being swapped out, and a list that unmounted for it would lose
+     * every page the user has scrolled through.
      */
     @Test
     fun a_session_refresh_does_not_blank_the_signed_in_screen() {
         runComposeUiTest {
             var refreshing by mutableStateOf(false)
-            setContent {
-                RouteAt(SessionState.SignedIn(MalUser(1, "someone"), refreshing), animeList)
-            }
-            waitUntil("the first page lands", WAIT_MS) { animeList.state.value.loaded }
-            onNodeWithText(FAKE_MAL_ANIME_TITLES.first()).assertIsDisplayed()
+            setContent { SessionRoute(signedIn(refreshing = refreshing), RecordedActions().actions) }
+            onNodeWithText(FIXTURE_TITLES.first()).assertIsDisplayed()
 
             refreshing = true
             waitForIdle()
 
             onNodeWithTag(ANIME_LIST_TAG).assertIsDisplayed()
-            onNodeWithText(FAKE_MAL_ANIME_TITLES.first()).assertIsDisplayed()
+            onNodeWithText(FIXTURE_TITLES.first()).assertIsDisplayed()
             onNodeWithTag(SESSION_USER_NAME_TAG).assertIsDisplayed()
         }
     }
 
-    /**
-     * Reload is the way to pick up a change made on myanimelist.net, so it has to be a refetch of
-     * the list the user is actually looking at — not of the default one. The filter and the Sort
-     * Order are both moved off their defaults first, because a Reload that quietly dropped either
-     * would look identical to a working one on a screen that had never been touched.
-     */
-    @Test
-    fun reload_refetches_the_first_page_with_the_current_filter_and_sort_order() {
-        val requests = Collections.synchronizedList(mutableListOf<Url>())
-        val reloading = pagedRepository(onAnimeListRequest = { requests += it })
-        val reloadingList = animeListViewModel(reloading)
-        try {
-            runComposeUiTest {
-                setContent {
-                    RouteAt(SessionState.SignedIn(MalUser(1, "someone")), reloadingList)
-                }
-                waitUntil("the first page lands", WAIT_MS) { reloadingList.state.value.entries.size == 50 }
-
-                onNodeWithText("Watching").performClick()
-                waitUntil("the filtered page lands", WAIT_MS) {
-                    reloadingList.state.value.watchStatus == WatchStatus.Watching &&
-                        !reloadingList.state.value.loadingFirstPage
-                }
-                onNodeWithTag(ANIME_LIST_SORT_TAG).performClick()
-                onNodeWithText("Title (A–Z)").performClick()
-                waitUntil("the re-ordered page lands", WAIT_MS) {
-                    reloadingList.state.value.sortOrder == AnimeListSortOrder.Title &&
-                        !reloadingList.state.value.loadingFirstPage
-                }
-                // Two pages deep, so a Reload that started from where the scroll left off rather
-                // than from `offset=0` would show up in the request below.
-                scrollToLastLoadedEntry(reloadingList)
-                waitUntil("a second page lands", WAIT_MS) { reloadingList.state.value.entries.size == 100 }
-                requests.clear()
-
-                onNodeWithTag(SESSION_MENU_BUTTON_TAG).performClick()
-                onNodeWithText("Reload").performClick()
-
-                waitUntil("the reloaded first page lands", WAIT_MS) {
-                    reloadingList.state.value.entries.size == 50
-                }
-                assertEquals(
-                    listOf(Triple("watching", "anime_title", "0")),
-                    requests.map {
-                        Triple(it.parameters["status"], it.parameters["sort"], it.parameters["offset"])
-                    },
-                    "Reload must refetch the list on screen from its start, and ask for it once",
-                )
-            }
-        } finally {
-            reloading.close()
-        }
-    }
+    // --- The signed-in screen: the diagnostics dialog ---------------------------------------------
 
     /**
      * `SessionDebugPanel` is a real tool rather than scaffolding — it is the only way a human ever
@@ -951,8 +901,7 @@ class SessionRouteTest {
     @Test
     fun session_diagnostics_opens_the_debug_panel_in_a_dialog() {
         runComposeUiTest {
-            setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), animeList) }
-            waitUntil("the Anime List settles", WAIT_MS) { animeList.state.value.loaded }
+            setContent { SessionRoute(signedIn(), RecordedActions().actions) }
 
             // "Force 401" writes an invalid token into the store, so it must not be a stray tap away.
             onNodeWithText("Force 401").assertDoesNotExist()
@@ -977,187 +926,42 @@ class SessionRouteTest {
     }
 
     /**
-     * The wiring the `MockEngine` test in `:core` cannot see: that the button is connected to
-     * [MalSessionViewModel.forceExpireAccessToken] at all. Whether the resulting 401 then drives
-     * exactly one refresh is
-     * `MalSessionRefreshTest.forcing_the_access_token_to_expire_drives_exactly_one_real_refresh`.
+     * The panel's three buttons, each reaching its own action, and the warning that only appears once
+     * the access token has been deliberately invalidated.
+     *
+     * What each button then does is `:core`'s: whether a forced 401 drives exactly one real refresh
+     * is `MalSessionRefreshTest.forcing_the_access_token_to_expire_drives_exactly_one_real_refresh`,
+     * and that the refresh token survives it is the same file's. What a rendering can say is that the
+     * button a person presses is the one wired to it — three buttons on one action would be invisible
+     * everywhere else.
      */
     @Test
-    fun the_force_401_button_invalidates_the_stored_access_token() {
+    fun each_debug_panel_button_reaches_its_own_action() {
+        val actions = RecordedActions()
         runComposeUiTest {
-            store.writeSession(
-                MalTokens("Bearer", 2_415_600, "a-valid-access-token", "a-refresh-token"),
-                MalUser(1, "someone"),
-            )
-            setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), animeList) }
-            waitUntil("the Anime List settles", WAIT_MS) { animeList.state.value.loaded }
+            setContent { SessionRoute(signedIn(diagnostics = TEST_DIAGNOSTICS), actions.actions) }
             openDiagnostics()
 
+            onNodeWithText("Reload diagnostics").performClick()
+            onNodeWithText("Reload profile").performClick()
             onNodeWithText("Force 401").performClick()
 
             assertEquals(
-                "a-refresh-token",
-                store.readSession()?.tokens?.refreshToken,
-                "Force 401 must keep the refresh token — there is nothing to refresh with otherwise.",
+                listOf("reloadDiagnostics", "refreshUser", "forceExpireAccessToken"),
+                actions.clicks(),
             )
             onNodeWithText("deliberately invalidated", substring = true).assertIsDisplayed()
         }
     }
 
-    /**
-     * Ticket 06's first state. A centred spinner and a list are different shapes, so the page jumps
-     * when the data lands; a skeleton is the list, drawn empty.
-     *
-     * `onAllNodesWithTag`, because the skeleton is one tagged placeholder per grid cell rather than
-     * one tagged wrapper — which is what lets the grid lay the placeholders out at the very column
-     * width the cards replacing them will get.
-     */
-    @Test
-    fun the_first_page_shows_a_skeleton_in_the_shape_of_the_list() {
-        val releaseFirstPage = CompletableDeferred<Unit>()
-        val holding = pagedRepository(holdAnimeList = { releaseFirstPage.await() })
-        val holdingList = animeListViewModel(holding)
-        try {
-            runComposeUiTest {
-                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), holdingList) }
-                waitUntil("the first page is in flight", WAIT_MS) { holdingList.state.value.loadingFirstPage }
-                waitForIdle()
-
-                onAllNodesWithTag(ANIME_LIST_SKELETON_TAG)[0].assertIsDisplayed()
-
-                releaseFirstPage.complete(Unit)
-                waitUntil("the first page lands", WAIT_MS) { holdingList.state.value.entries.size == 50 }
-                waitForIdle()
-
-                onAllNodesWithTag(ANIME_LIST_SKELETON_TAG).assertCountEquals(0)
-                onNodeWithText("Anime 1").assertIsDisplayed()
-            }
-        } finally {
-            holding.close()
-        }
-    }
-
-    /**
-     * Ticket 06's second state: an empty account is not a broken app, and the fix for it is not in
-     * this app at all — which is why it comes with a way out to myanimelist.net.
-     */
-    @Test
-    fun an_empty_anime_list_says_so_and_points_at_myanimelist() {
-        val opened = mutableListOf<String>()
-        val nothing = pagedRepository(animeListTitles = { emptyList() })
-        val nothingList = animeListViewModel(nothing)
-        try {
-            runComposeUiTest {
-                setContent {
-                    CompositionLocalProvider(LocalUriHandler provides RecordingUriHandler(opened)) {
-                        RouteAt(SessionState.SignedIn(MalUser(1, "someone")), nothingList)
-                    }
-                }
-                waitUntil("the empty first page lands", WAIT_MS) { nothingList.state.value.loaded }
-                waitForIdle()
-
-                onNodeWithTag(ANIME_LIST_EMPTY_TAG).assertIsDisplayed()
-                assertTrue(
-                    onNodeWithTag(ANIME_LIST_EMPTY_TAG).textContent().contains("nothing on your MyAnimeList"),
-                    "an empty account must be told it is empty, not left with a blank screen",
-                )
-
-                onNodeWithText("Open myanimelist.net").performClick()
-
-                assertEquals(listOf(MY_ANIME_LIST_URL), opened)
-            }
-        } finally {
-            nothing.close()
-        }
-    }
-
-    /**
-     * Ticket 06's third state, and the pair this spec is easiest to collapse by accident: an empty
-     * *slice* is a filter to undo, and saying "your list is empty" to a user with four hundred
-     * completed shows is a false statement about their account.
-     *
-     * So the message names the filter and the way out is one tap, rather than the user having to
-     * work out that the chip they tapped is what emptied the screen.
-     */
-    @Test
-    fun a_filter_that_matches_nothing_names_it_and_offers_a_way_back() {
-        val sliced = pagedRepository(
-            animeListTitles = { url ->
-                if (url.parameters["status"] == "on_hold") emptyList() else (1..120).map { "Anime $it" }
-            },
-        )
-        val slicedList = animeListViewModel(sliced)
-        try {
-            runComposeUiTest {
-                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), slicedList) }
-                waitUntil("the whole list lands", WAIT_MS) { slicedList.state.value.entries.size == 50 }
-
-                onNodeWithText("On hold").performClick()
-                waitUntil("the empty slice lands", WAIT_MS) {
-                    slicedList.state.value.let { it.loaded && it.entries.isEmpty() }
-                }
-                waitForIdle()
-
-                assertEquals(
-                    "Nothing on hold.",
-                    onNodeWithTag(ANIME_LIST_EMPTY_TAG).textContent(),
-                    "the message must name the filter rather than report an empty account",
-                )
-
-                onNodeWithText("Show all").performClick()
-
-                waitUntil("the whole list comes back", WAIT_MS) { slicedList.state.value.entries.size == 50 }
-                waitForIdle()
-                onNodeWithText("Anime 1").assertIsDisplayed()
-                onNodeWithText("All").assertIsSelected()
-                onNodeWithTag(ANIME_LIST_EMPTY_TAG).assertDoesNotExist()
-            }
-        } finally {
-            sliced.close()
-        }
-    }
-
-    /**
-     * Ticket 06's fifth state. Nothing loaded, so there is nothing to keep on screen and the error
-     * is the screen — which is the half of the pair that must *not* look like a failed later page.
-     */
-    @Test
-    fun a_failed_first_page_is_an_error_with_a_retry_that_works() {
-        var failing = true
-        val flaky = pagedRepository(failAnimeListAt = { offset -> offset == 0 && failing })
-        val flakyList = animeListViewModel(flaky)
-        try {
-            runComposeUiTest {
-                setContent { RouteAt(SessionState.SignedIn(MalUser(1, "someone")), flakyList) }
-                waitUntil("the first page fails", WAIT_MS) { flakyList.state.value.firstPageError != null }
-                waitForIdle()
-
-                onNodeWithTag(ANIME_LIST_ERROR_TAG).assertIsDisplayed()
-                onAllNodesWithTag(ANIME_LIST_SKELETON_TAG).assertCountEquals(0)
-                onNodeWithTag(ANIME_LIST_MORE_TAG).assertDoesNotExist()
-                onNodeWithTag(ANIME_LIST_EMPTY_TAG).assertDoesNotExist()
-
-                failing = false
-                onNodeWithText("Retry").performClick()
-
-                waitUntil("the retry lands the page that failed", WAIT_MS) {
-                    flakyList.state.value.entries.size == 50
-                }
-                waitForIdle()
-                onNodeWithTag(ANIME_LIST_ERROR_TAG).assertDoesNotExist()
-                onNodeWithText("Anime 1").assertIsDisplayed()
-            }
-        } finally {
-            flaky.close()
-        }
-    }
+    // --- Helpers ---------------------------------------------------------------------------------
 
     /**
      * Ends a hand-built ViewModel's `viewModelScope`, which is otherwise never ended.
      *
      * A ViewModel built by a test rather than by a `ViewModelStore` has nothing that will ever clear
-     * it, so its scope outlives the test with a page request still in it — to land after `tearDown`
-     * has closed the repository underneath it and reset the Main dispatcher. Through a
+     * it, so its scope outlives the test with a page request still in it — to land after the
+     * repository underneath it has been closed and the Main dispatcher reset. Through a
      * `ViewModelStore` because `ViewModel.clear()` is `internal` and this is the public door to it.
      */
     private fun clear(viewModel: AnimeListViewModel) {
@@ -1174,98 +978,6 @@ class SessionRouteTest {
         onNodeWithTag(SESSION_MENU_BUTTON_TAG).performClick()
         onNodeWithText("Session diagnostics").performClick()
         waitForIdle()
-    }
-
-    /**
-     * The routing, rendered at a chosen [session] with this test's real ViewModels behind it.
-     *
-     * Stands in for `AppScreen` for every case that wants to *choose* the Session state rather than
-     * drive one: the Session is a flow of one value, and the other five inputs are the live ones. The
-     * actions come from the same [screenActions] the app uses, so a control here does what it does
-     * there.
-     *
-     * Ticket 04 is what makes most of these cases stop needing this at all — a `ScreenState` literal
-     * and a record of no-op lambdas is the whole setup for anything that is not about the list moving.
-     */
-    @Composable
-    private fun RouteAt(session: SessionState, list: AnimeListViewModel = animeList) {
-        val sessionFlow = remember { MutableStateFlow(session) }
-        sessionFlow.value = session
-        val channel = rememberAuthRedirectChannel()
-        val uriHandler = LocalUriHandler.current
-        val scope = rememberCoroutineScope()
-        val source = remember(list, scope) {
-            ScreenStateSource(
-                session = sessionFlow,
-                config = viewModel.config,
-                animeList = list.state,
-                layout = list.layout,
-                form = viewModel.form,
-                diagnostics = viewModel.diagnostics,
-                scope = scope,
-            )
-        }
-        val actions = remember(list, channel, uriHandler) {
-            screenActions(viewModel, list, channel, uriHandler::openUri)
-        }
-        SessionRoute(source.state.collectAsStateWithLifecycle().value, actions)
-    }
-
-    /**
-     * An [AnimeListViewModel] over this test's own store, so a Layout written by one survives into
-     * the next — which is what "remembered across a launch" means when there is no process to
-     * restart. [store] is a parameter so a test can hand it a store that has never been written to.
-     */
-    private fun animeListViewModel(
-        repository: MalSessionRepository,
-        store: JsonTokenStore = this.store,
-    ) = AnimeListViewModel(
-        repository,
-        // A preference per "launch", over the store handed in: the record is the store's and the
-        // in-memory value is not, which is exactly the split a relaunch has.
-        //
-        // `Unconfined` rather than the app's `Dispatchers.Main.immediate`: the startup read then
-        // lands during construction, so a rendering test never has to wait on a preference to find
-        // out what Layout the screen opens on — and nothing of this scope outlives `resetMain`.
-        LayoutPreference(store, CoroutineScope(Dispatchers.Unconfined)),
-    )
-
-    /**
-     * A repository over a MAL that holds 120 entries — more than two pages of 50, so paging has a
-     * middle as well as an end. Its own repository rather than [setUp]'s, because the default fake
-     * holds one short page: every other test on this screen wants that, and this one cannot use it.
-     */
-    private fun pagedRepository(
-        animeListTitles: (Url) -> List<String> = { (1..120).map { "Anime $it" } },
-        failAnimeListAt: (Int) -> Boolean = { false },
-        holdAnimeList: suspend (HttpRequestData) -> Unit = {},
-        onAnimeListRequest: (Url) -> Unit = {},
-    ) = MalSessionRepository(
-        store,
-        initialConfig = MalAuthConfig(clientId = "a-client-id"),
-        clientFactory = fakeMal(
-            animeListTitles = animeListTitles,
-            failAnimeListAt = failAnimeListAt,
-            holdAnimeList = holdAnimeList,
-            onRequest = { request ->
-                if (request.url.encodedPath.endsWith("/users/@me/animelist")) {
-                    onAnimeListRequest(request.url)
-                }
-            },
-        ),
-    )
-
-    /**
-     * Puts the last loaded entry on screen, which is what the proximity trigger reads.
-     *
-     * By index rather than by text, because the trigger is about *position in the layout* and a
-     * `performScrollToNode` would stop as soon as the node was composed rather than at the end.
-     * The lazy list holds one chrome item above the entries and one below — the rest of the chrome
-     * is in the top app bar now — so the entry count is always a valid index inside it and always
-     * within a screenful of the bottom.
-     */
-    private fun ComposeUiTest.scrollToLastLoadedEntry(animeList: AnimeListViewModel) {
-        onNodeWithTag(ANIME_LIST_TAG).performScrollToIndex(animeList.state.value.entries.size)
     }
 
     /** Stands in for the desktop clipboard, which a unit test must not actually write to. */
@@ -1286,22 +998,22 @@ class SessionRouteTest {
             opened += uri
         }
     }
-
-    private fun pendingAuthorization() = PendingAuthorization(
-        codeVerifier = "a-verifier",
-        state = "a-state",
-        redirectUri = DESKTOP_REDIRECT_URI,
-        clientId = "a-client-id",
-        startedAtEpochMs = 0L,
-    )
 }
 
 /**
- * Generous, because these waits are for real sockets and real dispatchers rather than for a frame.
- * A wait that is too short reads as a flaky test; one that is too long only costs time when
- * something is already broken.
+ * Generous, because the one test that waits is waiting for a real socket and a real dispatcher rather
+ * than for a frame. A wait that is too short reads as a flaky test; one that is too long only costs
+ * time when something is already broken.
  */
 private const val WAIT_MS: Long = 5_000
+
+private val TEST_DIAGNOSTICS = SessionDiagnostics(
+    obtainedAtEpochMs = 1_754_000_000_000,
+    ageMillis = 60_000,
+    accessTokenLength = 512,
+    hasRefreshToken = true,
+    accessTokenIsDeliberatelyInvalid = true,
+)
 
 /** The concatenated text a node draws, for assertions about copy rather than about structure. */
 private fun SemanticsNodeInteraction.textContent(): String =
