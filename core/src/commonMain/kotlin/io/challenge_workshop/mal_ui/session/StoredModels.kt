@@ -1,7 +1,9 @@
 package io.challenge_workshop.mal_ui.session
 
+import io.challenge_workshop.mal_ui.mal.MalAuthConfig
 import io.challenge_workshop.mal_ui.mal.MalTokens
 import io.challenge_workshop.mal_ui.mal.MalUser
+import io.challenge_workshop.mal_ui.mal.authorizationUrl
 import kotlinx.serialization.Serializable
 
 /**
@@ -40,3 +42,25 @@ data class PendingAuthorization(
     val clientId: String,
     val startedAtEpochMs: Long,
 )
+
+/**
+ * The authorization URL for a restored [pending], so the UI can offer it even after a restart
+ * without the URL itself ever having been stored.
+ *
+ * Takes the Pending Authorization's own Client ID and Redirect URI over whatever [config] holds now:
+ * either may have been changed since the sign-in started, and MAL matches `redirect_uri`
+ * byte-exactly against the one the authorization began with.
+ *
+ * A plain function over a `MalAuthConfig` rather than a method on `MalSessionRepository`, because the
+ * one caller that matters is `ScreenStateSource`'s combine, which is pure and has a
+ * `StateFlow<MalAuthConfig>` rather than a repository. Nothing here suspends, allocates an
+ * `HttpClient`, or can throw — a total mapping cannot.
+ *
+ * **Never log the result.** Under `plain` PKCE the code verifier travels inside it.
+ */
+fun authorizationUrlFor(config: MalAuthConfig, pending: PendingAuthorization): String =
+    authorizationUrl(
+        config = config.copy(clientId = pending.clientId, redirectUri = pending.redirectUri),
+        codeVerifier = pending.codeVerifier,
+        state = pending.state,
+    )

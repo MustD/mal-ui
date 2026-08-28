@@ -28,6 +28,7 @@ import io.challenge_workshop.mal_ui.session.FakeKeyValueStore
 import io.challenge_workshop.mal_ui.session.JsonTokenStore
 import io.challenge_workshop.mal_ui.session.MalSessionRepository
 import io.challenge_workshop.mal_ui.session.SessionState
+import io.challenge_workshop.mal_ui.session.authorizationUrlFor
 import java.util.Collections
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -103,7 +104,7 @@ class SignInScreenTest {
 
                 val state = repository.state.value as SessionState.Authorizing
                 assertEquals(DESKTOP_REDIRECT_URI, state.pending.redirectUri)
-                val authorizationUrl = repository.authorizationUrlFor(state.pending)
+                val authorizationUrl = authorizationUrlFor(repository.config.value, state.pending)
                 waitUntil("the channel opens the browser", WAIT_MS) {
                     opened.toList() == listOf(authorizationUrl)
                 }

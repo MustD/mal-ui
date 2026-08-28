@@ -54,6 +54,16 @@ pure. The URL is rebuilt through `authorizationUrl(config, verifier, state)`, wh
 mapping cannot throw, or a combine that threw would take the collecting scope with it and leave the app on whichever
 frame it last drew.
 
+## What came with it
+
+`MalRouting` — this build's endpoints and Redirect URI, with `usesRelay` derived — is a second new `:core` type, carried
+by the `SignedOut` and `SignedIn` variants. It was not asked for: it is what the screens lost when they stopped taking
+`MalSessionViewModel`, which exposed `endpoints`, `redirectUri` and `usesRelay` directly. Both readers need it and
+neither can compute it — the sign-in screen says so up front because a browser with no relay running fails at its first
+request with a bare "Failed to fetch", and the debug panel says so afterwards. It is *not* a seventh constructor
+parameter: `platformMalEndpoints()` is an `expect fun` and so already this Target's answer, and injecting it would be
+the same one-implementation seam that kept a `(PendingAuthorization) -> String` adapter out.
+
 ## Consequences
 
 - Screens take a `ScreenState` variant plus an actions record, never a ViewModel. `App()` resolves both ViewModels;

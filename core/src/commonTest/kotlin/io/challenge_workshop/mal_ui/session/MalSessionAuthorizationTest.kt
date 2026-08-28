@@ -173,7 +173,7 @@ class MalSessionAuthorizationTest {
             other
         }
 
-        assertEquals(url, fresh.repository.authorizationUrlFor(pending))
+        assertEquals(url, authorizationUrlFor(fresh.repository.config.value, pending))
         f.repository.close()
         fresh.repository.close()
     }

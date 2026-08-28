@@ -4,9 +4,9 @@ import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
 import io.challenge_workshop.mal_ui.animelist.AnimeListState
 import io.challenge_workshop.mal_ui.mal.MalAuthConfig
 import io.challenge_workshop.mal_ui.mal.MalEndpoints
-import io.challenge_workshop.mal_ui.mal.authorizationUrl
 import io.challenge_workshop.mal_ui.mal.platformMalEndpoints
 import io.challenge_workshop.mal_ui.session.SessionDiagnostics
+import io.challenge_workshop.mal_ui.session.authorizationUrlFor
 import io.challenge_workshop.mal_ui.session.SessionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
@@ -32,12 +32,16 @@ import kotlinx.coroutines.flow.stateIn
  *  - `layout` is `LayoutPreference.value` for the same reason in reverse — the preference is
  *    process-scoped, and a Layout change issues no request, so the pager has never heard of it.
  *
+ * The six flows are the whole constructor. Where this build sends MAL traffic is *not* a seventh
+ * parameter: [platformMalEndpoints] is an `expect fun` and therefore already this Target's answer, and
+ * injecting it would be a seam with one production implementation — the same objection that kept a
+ * `(PendingAuthorization) -> String` adapter out. A test asserts it against `platformMalEndpoints()`
+ * on whichever of the four Targets it is running on, which is a stronger claim than a pinned value.
+ *
  * @param scope where the combine runs. `SharingStarted.Eagerly`, because [state] is read by a
  * composable that must have an answer before it first draws — and [state]`.value` is right even
  * before that scope has dispatched anything, since the initial value is the same mapping applied to
  * the six current values.
- * @param endpoints where this build sends token and API traffic. A parameter only so a test can pin
- * the relay copy without being on a browser Target; the app takes the default.
  */
 class ScreenStateSource(
     session: StateFlow<SessionState>,
@@ -47,19 +51,22 @@ class ScreenStateSource(
     form: StateFlow<SignInForm>,
     diagnostics: StateFlow<SessionDiagnostics?>,
     scope: CoroutineScope,
-    private val endpoints: MalEndpoints = platformMalEndpoints(),
 ) {
+    private val endpoints: MalEndpoints = platformMalEndpoints()
+
     val state: StateFlow<ScreenState> =
-        combine(session, config, animeList, layout, form, diagnostics) { values ->
-            @Suppress("UNCHECKED_CAST")
-            screenState(
-                session = values[0] as SessionState,
-                config = values[1] as MalAuthConfig,
-                animeList = values[2] as AnimeListState,
-                layout = values[3] as AnimeListLayout,
-                form = values[4] as SignInForm,
-                diagnostics = values[5] as SessionDiagnostics?,
-            )
+        // Six flows through the *five*-argument overload, with the two the ViewModel owns paired
+        // first. `combine` is only typed up to five: the six-argument form hands the lambda an
+        // `Array<Any?>` to index and cast, which compiles just as happily when two inputs of the
+        // same type are swapped. This keeps every input checked by the compiler.
+        combine(
+            session,
+            config,
+            animeList,
+            layout,
+            combine(form, diagnostics) { form, diagnostics -> form to diagnostics },
+        ) { session, config, animeList, layout, (form, diagnostics) ->
+            screenState(session, config, animeList, layout, form, diagnostics)
         }.stateIn(
             scope = scope,
             started = SharingStarted.Eagerly,
@@ -79,8 +86,8 @@ class ScreenStateSource(
      * Nothing here can throw. A combine that threw would take the collecting scope with it and leave
      * the app on whichever frame it last drew, which is the failure mode a screen-state seam exists to
      * make impossible — so the authorization URL is rebuilt through
-     * [io.challenge_workshop.mal_ui.mal.authorizationUrl], which has no `require` in it, rather than
-     * through the minting path that does.
+     * [io.challenge_workshop.mal_ui.session.authorizationUrlFor], which has no `require` in it, rather
+     * than through the minting path that does.
      */
     private fun screenState(
         session: SessionState,
@@ -102,17 +109,7 @@ class ScreenStateSource(
             )
 
             is SessionState.Authorizing -> ScreenState.Authorizing(
-                // The Pending Authorization's own Client ID and Redirect URI, not the config's: it
-                // may have been minted before either was changed, and MAL matches `redirect_uri`
-                // byte-exactly against the one the authorization started with.
-                authorizationUrl = authorizationUrl(
-                    config = config.copy(
-                        clientId = session.pending.clientId,
-                        redirectUri = session.pending.redirectUri,
-                    ),
-                    codeVerifier = session.pending.codeVerifier,
-                    state = session.pending.state,
-                ),
+                authorizationUrl = authorizationUrlFor(config, session.pending),
                 form = form,
             )
 

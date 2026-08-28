@@ -46,6 +46,25 @@ class LayoutPreferenceTest {
     }
 
     /**
+     * A device that has never chosen opens on cards, and nothing about that is an error.
+     *
+     * The store's own default is `JsonTokenStoreTest`'s; what this adds is that the preference
+     * *reaches* it — a read that threw on an absent record, or one whose absence surfaced as a
+     * failure for a caller to handle, would show up here and nowhere else. It is the one case in this
+     * file with nothing stored, which is exactly the state a first launch reads.
+     */
+    @Test
+    fun a_device_that_has_never_chosen_a_layout_opens_on_cards() = runTest {
+        val kv = GatedKeyValueStore()
+        val preference = LayoutPreference(JsonTokenStore(kv), this)
+
+        kv.releaseReads()
+        advanceUntilIdle()
+
+        assertEquals(AnimeListLayout.Cards, preference.value.value)
+    }
+
+    /**
      * A tap that beats the startup read wins, and the read does not undo it.
      *
      * The read is a suspending store call and the toggle is a tap, so on a cold start with a slow

@@ -6,6 +6,7 @@ import io.challenge_workshop.mal_ui.animelist.WatchStatus
 import io.challenge_workshop.mal_ui.mal.MalAuthConfig
 import io.challenge_workshop.mal_ui.mal.MalEndpoints
 import io.challenge_workshop.mal_ui.mal.MalUser
+import io.challenge_workshop.mal_ui.mal.platformMalEndpoints
 import io.challenge_workshop.mal_ui.session.PendingAuthorization
 import io.challenge_workshop.mal_ui.session.SessionDiagnostics
 import io.challenge_workshop.mal_ui.session.SessionState
@@ -47,9 +48,6 @@ class ScreenStateSourceTest {
         form = form,
         diagnostics = diagnostics,
         scope = CoroutineScope(Dispatchers.Unconfined),
-        // Pinned rather than taken from this Target, so the two assertions about the relay say the
-        // same thing on jvm as they do in a browser.
-        endpoints = MalEndpoints(tokenEndpoint = DIRECT_TOKEN_ENDPOINT, apiBaseUrl = DIRECT_API_BASE),
     )
 
     private val state: ScreenState get() = source.state.value
@@ -257,23 +255,39 @@ class ScreenStateSourceTest {
      * Where this build sends MAL traffic, which the sign-in screen says up front and the debug panel
      * repeats: a browser with no relay running fails at its first request with a bare "Failed to
      * fetch", and nothing else in the app can tell the user why.
+     *
+     * Asserted against [platformMalEndpoints] rather than against a value pinned by the test, which is
+     * what makes this worth running on four Targets: it says the browsers are relayed and jvm and
+     * android are not, which is the actual claim. A pinned value would have said the same thing four
+     * times.
      */
     @Test
-    fun the_routing_says_whether_this_build_goes_through_the_relay() {
+    fun the_routing_is_this_targets_own_and_says_whether_it_goes_through_the_relay() {
         session.value = SessionState.SignedOut(SignedOutReason.NeverSignedIn)
-        val direct = assertIs<ScreenState.SignedOut>(state).routing
+        val routing = assertIs<ScreenState.SignedOut>(state).routing
 
-        assertEquals(false, direct.usesRelay)
-        assertEquals(REDIRECT_URI, direct.redirectUri)
+        assertEquals(platformMalEndpoints(), routing.endpoints)
+        assertEquals(REDIRECT_URI, routing.redirectUri)
+        assertEquals(
+            !platformMalEndpoints().tokenEndpoint.startsWith(MalAuthConfig.DEFAULT_TOKEN_ENDPOINT),
+            routing.usesRelay,
+            "a Target that does not call MAL's own token endpoint is going through the relay",
+        )
+    }
 
-        val relayed = MalRouting(
-            endpoints = MalEndpoints(
-                tokenEndpoint = "https://mal-ui.localhost/mal/oauth2/token",
-                apiBaseUrl = "https://mal-ui.localhost/mal/v2",
-            ),
+    /**
+     * The relay origin the sign-in screen's warning turns on, from both sides, on whichever Target
+     * this is — so the branch is covered even where [platformMalEndpoints] only ever gives one answer.
+     */
+    @Test
+    fun a_relayed_token_endpoint_is_what_makes_a_build_relayed() {
+        fun routingFor(tokenEndpoint: String) = MalRouting(
+            endpoints = MalEndpoints(tokenEndpoint = tokenEndpoint, apiBaseUrl = "unused"),
             redirectUri = REDIRECT_URI,
         )
-        assertEquals(true, relayed.usesRelay)
+
+        assertEquals(false, routingFor(MalAuthConfig.DEFAULT_TOKEN_ENDPOINT).usesRelay)
+        assertEquals(true, routingFor("https://mal-ui.localhost/mal/oauth2/token").usesRelay)
     }
 
     private fun signedIn(): ScreenState.SignedIn = assertIs<ScreenState.SignedIn>(state)
@@ -281,9 +295,6 @@ class ScreenStateSourceTest {
 
 /** Where this Target's tests pretend the desktop listener is. Any registered URI would do. */
 internal const val REDIRECT_URI: String = "http://127.0.0.1:18040/oauth/callback"
-
-private const val DIRECT_TOKEN_ENDPOINT = MalAuthConfig.DEFAULT_TOKEN_ENDPOINT
-private const val DIRECT_API_BASE = MalAuthConfig.DEFAULT_API_BASE_URL
 
 /**
  * One [SessionState] per subtype, shared between the mapping test and the jvm-only coverage test that

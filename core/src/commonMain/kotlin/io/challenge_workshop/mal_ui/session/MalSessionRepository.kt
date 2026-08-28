@@ -2,7 +2,6 @@ package io.challenge_workshop.mal_ui.session
 
 import io.challenge_workshop.mal_ui.animelist.MalAnimeListClient
 import io.challenge_workshop.mal_ui.mal.HttpClientFactory
-import io.challenge_workshop.mal_ui.mal.authorizationUrl
 import io.challenge_workshop.mal_ui.mal.MalAuthClient
 import io.challenge_workshop.mal_ui.mal.MalAuthConfig
 import io.challenge_workshop.mal_ui.mal.MalAuthException
@@ -164,17 +163,6 @@ class MalSessionRepository(
         _state.value = SessionState.Authorizing(pending)
         return request.authorizationUrl
     }
-
-    /**
-     * Rebuilds the authorization URL for a restored [pending], so the UI can offer it even after a
-     * restart without ever having stored the URL itself.
-     */
-    fun authorizationUrlFor(pending: PendingAuthorization): String =
-        authorizationUrl(
-            config = _config.value.copy(clientId = pending.clientId, redirectUri = pending.redirectUri),
-            codeVerifier = pending.codeVerifier,
-            state = pending.state,
-        )
 
     /**
      * Finishes an authorization from whatever came back — a full redirect URL, a bare query string, or

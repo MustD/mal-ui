@@ -15,15 +15,15 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.ViewModelStore
 import io.challenge_workshop.mal_ui.animelist.AiringStatus
-import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
-import io.challenge_workshop.mal_ui.auth.SESSION_MENU_BUTTON_TAG
 import io.challenge_workshop.mal_ui.animelist.AnimeListEntry
 import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
 import io.challenge_workshop.mal_ui.animelist.AnimeListSortOrder
 import io.challenge_workshop.mal_ui.animelist.AnimeListState
+import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.animelist.WatchStatus
 import io.challenge_workshop.mal_ui.auth.AuthorizingActions
 import io.challenge_workshop.mal_ui.auth.DiagnosticsActions
+import io.challenge_workshop.mal_ui.auth.SESSION_MENU_BUTTON_TAG
 import io.challenge_workshop.mal_ui.auth.ScreenActions
 import io.challenge_workshop.mal_ui.auth.SignInActions
 import io.challenge_workshop.mal_ui.auth.SignedInActions
@@ -34,10 +34,9 @@ import io.challenge_workshop.mal_ui.mal.MalUser
 import io.challenge_workshop.mal_ui.screen.MalRouting
 import io.challenge_workshop.mal_ui.screen.ScreenState
 import io.challenge_workshop.mal_ui.screen.SignInForm
+import io.challenge_workshop.mal_ui.screen.explain
 import io.challenge_workshop.mal_ui.session.SessionDiagnostics
 import io.challenge_workshop.mal_ui.session.SignedOutReason
-import io.challenge_workshop.mal_ui.screen.explain
-
 /**
  * Every screen this app has, as a literal.
  *

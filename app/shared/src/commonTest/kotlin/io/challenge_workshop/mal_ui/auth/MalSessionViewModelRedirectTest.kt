@@ -8,6 +8,7 @@ import io.challenge_workshop.mal_ui.session.FakeKeyValueStore
 import io.challenge_workshop.mal_ui.session.JsonTokenStore
 import io.challenge_workshop.mal_ui.session.MalSessionRepository
 import io.challenge_workshop.mal_ui.session.SessionState
+import io.challenge_workshop.mal_ui.session.authorizationUrlFor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
@@ -57,7 +58,7 @@ class MalSessionViewModelRedirectTest {
         // The browser still opens, and the URL is still offered by hand — no platform's
         // browser-opening call reliably reports whether it worked.
         val pending = assertNotNull(store.readPending())
-        assertEquals(listOf(repository.authorizationUrlFor(pending)), opened)
+        assertEquals(listOf(authorizationUrlFor(repository.config.value, pending)), opened)
         assertEquals(SessionState.Authorizing(pending), repository.state.value)
 
         viewModel.onPastedRedirectChange("$TEST_REDIRECT_URI?code=the-code&state=${pending.state}")
@@ -75,7 +76,7 @@ class MalSessionViewModelRedirectTest {
         settle()
 
         val pending = assertNotNull(store.readPending())
-        assertEquals(listOf(repository.authorizationUrlFor(pending)), channel.openedUrls)
+        assertEquals(listOf(authorizationUrlFor(repository.config.value, pending)), channel.openedUrls)
         assertTrue(opened.isEmpty(), "An armed channel owns the browser; opening it twice opens two.")
         // A capture listening anywhere but where MAL redirects is a login that hangs.
         assertEquals(listOf(pending.redirectUri), channel.armedWith)
