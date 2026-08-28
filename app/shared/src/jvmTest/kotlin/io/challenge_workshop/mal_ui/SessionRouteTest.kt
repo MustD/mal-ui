@@ -43,6 +43,7 @@ import io.challenge_workshop.mal_ui.animelist.ANIME_LIST_SORT_ORDERS
 import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
 import io.challenge_workshop.mal_ui.animelist.AnimeListSortOrder
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
+import io.challenge_workshop.mal_ui.animelist.LayoutPreference
 import io.challenge_workshop.mal_ui.animelist.MY_ANIME_LIST_URL
 import io.challenge_workshop.mal_ui.animelist.WatchStatus
 import io.challenge_workshop.mal_ui.animelist.sortLabel
@@ -89,6 +90,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -1173,7 +1175,16 @@ class SessionRouteTest {
     private fun animeListViewModel(
         repository: MalSessionRepository,
         store: JsonTokenStore = this.store,
-    ) = AnimeListViewModel(repository, store)
+    ) = AnimeListViewModel(
+        repository,
+        // A preference per "launch", over the store handed in: the record is the store's and the
+        // in-memory value is not, which is exactly the split a relaunch has.
+        //
+        // `Unconfined` rather than the app's `Dispatchers.Main.immediate`: the startup read then
+        // lands during construction, so a rendering test never has to wait on a preference to find
+        // out what Layout the screen opens on — and nothing of this scope outlives `resetMain`.
+        LayoutPreference(store, CoroutineScope(Dispatchers.Unconfined)),
+    )
 
     /**
      * A repository over a MAL that holds 120 entries — more than two pages of 50, so paging has a

@@ -1,6 +1,7 @@
 package io.challenge_workshop.mal_ui.di
 
 import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
+import io.challenge_workshop.mal_ui.animelist.LayoutPreference
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
 import io.challenge_workshop.mal_ui.auth.StartupRedirect
 import io.challenge_workshop.mal_ui.mal.HttpClientFactory
@@ -8,6 +9,9 @@ import io.challenge_workshop.mal_ui.mal.MAL_CLIENT_ID
 import io.challenge_workshop.mal_ui.mal.MalAuthConfig
 import io.challenge_workshop.mal_ui.session.JsonTokenStore
 import io.challenge_workshop.mal_ui.session.MalSessionRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.json.Json
 import org.koin.core.KoinApplication
 import org.koin.core.context.startKoin
@@ -49,15 +53,31 @@ val appModule: Module = module {
         )
     }
 
+    // A `single`, matching the lifetime of the store it reads: the Layout is a device preference,
+    // not a screen's state, and it is one of the Screen State's six inputs — so it has to outlive
+    // every composition that reads it, and be the same instance for the source and the ViewModel.
+    //
+    // `Dispatchers.Main.immediate` is the same dispatcher every `viewModelScope` uses, which is what
+    // confines the preference's `chosen` guard to one thread. A scope of its own rather than a
+    // `viewModelScope`, because a startup read cancelled by a screen going away would leave the
+    // shipped default on screen for the rest of the launch.
+    single {
+        LayoutPreference(
+            store = get(),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+        )
+    }
+
     // Resolved with `koinViewModel()` from `App()`. A `viewModel` rather than a `single`, so it is
     // scoped to the composition's ViewModelStore like any other ViewModel; everything durable it
     // touches lives in the repository singleton above, so being recreated costs nothing.
     viewModel { MalSessionViewModel(repository = get(), startupRedirect = get()) }
 
     // Also a `viewModel`, and it takes the repository rather than a client of its own: the pager it
-    // builds must ride the one authenticated `HttpClient` that owns refresh. The store is the same
-    // singleton the repository writes the Session to — the Layout is its fourth record.
-    viewModel { AnimeListViewModel(repository = get(), store = get()) }
+    // builds must ride the one authenticated `HttpClient` that owns refresh. The Layout comes in as
+    // the preference above rather than as the store, so this ViewModel cannot reach the Session
+    // records that live beside it.
+    viewModel { AnimeListViewModel(repository = get(), layoutPreference = get()) }
 }
 
 /**

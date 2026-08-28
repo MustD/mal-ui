@@ -1,17 +1,25 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
 package io.challenge_workshop.mal_ui.di
 
+import io.challenge_workshop.mal_ui.animelist.LayoutPreference
 import io.challenge_workshop.mal_ui.mal.HttpClientFactory
 import io.challenge_workshop.mal_ui.mal.MAL_CLIENT_ID
 import io.challenge_workshop.mal_ui.mal.MalUser
 import io.challenge_workshop.mal_ui.session.JsonTokenStore
 import io.challenge_workshop.mal_ui.session.KeyValueStore
 import io.challenge_workshop.mal_ui.session.MalSessionRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.Json
 import org.koin.core.Koin
 import org.koin.core.context.startKoin
 import org.koin.core.context.stopKoin
 import org.koin.dsl.module
 import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -42,8 +50,18 @@ class AppGraphTest {
 
     private fun koin(): Koin = startKoin { modules(appModule, fakeStore) }.koin
 
+    @BeforeTest
+    fun setUp() {
+        // `LayoutPreference`'s scope is `Dispatchers.Main.immediate` — the dispatcher every
+        // `viewModelScope` uses — and no target's test platform provides one on its own.
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+    }
+
     @AfterTest
-    fun tearDown() = stopKoin()
+    fun tearDown() {
+        stopKoin()
+        Dispatchers.resetMain()
+    }
 
     @Test
     fun every_declared_dependency_resolves() {
@@ -54,6 +72,7 @@ class AppGraphTest {
         assertNotNull(koin.get<HttpClientFactory>())
         assertNotNull(koin.get<JsonTokenStore>())
         assertNotNull(koin.get<MalSessionRepository>())
+        assertNotNull(koin.get<LayoutPreference>())
 
         koin.get<MalSessionRepository>().close()
     }
@@ -86,6 +105,20 @@ class AppGraphTest {
 
         assertEquals(MAL_CLIENT_ID, repository.config.value.clientId)
         repository.close()
+    }
+
+    /**
+     * One preference for the whole process, because the Layout is a device preference rather than a
+     * screen's state: two instances would be two answers to what the user last chose, and the one the
+     * Screen State reads would not be the one a tap wrote to.
+     */
+    @Test
+    fun the_layout_preference_is_a_singleton() {
+        val koin = koin()
+
+        assertSame(koin.get<LayoutPreference>(), koin.get<LayoutPreference>())
+
+        koin.get<MalSessionRepository>().close()
     }
 
     @Test
