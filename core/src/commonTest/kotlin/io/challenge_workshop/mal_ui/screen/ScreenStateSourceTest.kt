@@ -1,7 +1,9 @@
 package io.challenge_workshop.mal_ui.screen
 
+import io.challenge_workshop.mal_ui.animelist.AnimeListContent
 import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
 import io.challenge_workshop.mal_ui.animelist.AnimeListState
+import io.challenge_workshop.mal_ui.animelist.AnimeListTail
 import io.challenge_workshop.mal_ui.animelist.WatchStatus
 import io.challenge_workshop.mal_ui.mal.MalAuthConfig
 import io.challenge_workshop.mal_ui.mal.MalEndpoints
@@ -142,38 +144,37 @@ class ScreenStateSourceTest {
         )
     }
 
-    /** Five screen states, and which one the signed-in screen is in is entirely the list's. */
+    /**
+     * Which Anime List screen the signed-in screen shows is entirely the list's: every variant reaches
+     * the screen verbatim, with the query beside it. *Deciding* the variant is the pager's, and
+     * `AnimeListPagerTest` covers that; what is asserted here is that nothing on the way re-decides it.
+     */
     @Test
-    fun the_five_anime_list_screen_states_are_the_lists_own() {
+    fun every_anime_list_screen_reaches_the_signed_in_screen_as_it_is() {
         session.value = SessionState.SignedIn(MalUser(1, "someone"))
+        val variants = listOf(
+            AnimeListContent.NotRequested,
+            AnimeListContent.FirstPageLoading,
+            AnimeListContent.FirstPageFailed("boom"),
+            AnimeListContent.Empty,
+            AnimeListContent.Entries(emptyList(), AnimeListTail.MoreFailed("boom"), replacing = false),
+            AnimeListContent.Entries(emptyList(), AnimeListTail.Idle, replacing = true),
+        )
 
-        // Nothing asked for yet: the skeleton, which is not the same thing as an empty list.
-        animeList.value = AnimeListState(loadingFirstPage = true)
-        assertEquals(AnimeListState(loadingFirstPage = true), signedIn().list)
-
-        // A first page landed and there was nothing in it: an empty account.
-        animeList.value = AnimeListState(loaded = true)
-        assertTrue(signedIn().list.loaded && signedIn().list.entries.isEmpty())
-
-        // The same, under a filter: an empty slice, which must not read as an empty account. The
-        // Watch Status is what separates them, and it is on the state rather than inferred.
-        animeList.value = AnimeListState(loaded = true, watchStatus = WatchStatus.OnHold)
-        assertEquals(WatchStatus.OnHold, signedIn().list.watchStatus)
-
-        // The two failures stay separate all the way to the screen: nothing loaded and the error is
-        // the screen, versus entries on screen and a retry at the bottom.
-        animeList.value = AnimeListState(firstPageError = "boom")
-        assertEquals("boom" to null, signedIn().list.let { it.firstPageError to it.moreError })
-
-        animeList.value = AnimeListState(entries = emptyList(), loaded = true, moreError = "boom")
-        assertEquals(null to "boom", signedIn().list.let { it.firstPageError to it.moreError })
+        for (content in variants) {
+            // Under a filter, because an empty slice must not read as an empty account: the Watch
+            // Status is what separates them, and it travels beside the variant rather than inferred.
+            val list = AnimeListState(content = content, watchStatus = WatchStatus.OnHold)
+            animeList.value = list
+            assertEquals(list, signedIn().list, "for $content")
+        }
     }
 
     /** A Layout change reaches the screen and touches nothing else. */
     @Test
     fun the_layout_reaches_the_signed_in_screen_and_changes_nothing_else() {
         session.value = SessionState.SignedIn(MalUser(1, "someone"))
-        animeList.value = AnimeListState(loaded = true)
+        animeList.value = AnimeListState(content = AnimeListContent.Empty)
         val before = signedIn()
 
         layout.value = AnimeListLayout.List
@@ -188,7 +189,7 @@ class ScreenStateSourceTest {
      */
     @Test
     fun a_session_refresh_keeps_the_anime_list() {
-        animeList.value = AnimeListState(loaded = true, revision = 3)
+        animeList.value = AnimeListState(content = AnimeListContent.Empty, revision = 3)
         session.value = SessionState.SignedIn(MalUser(1, "someone"), refreshing = true)
 
         assertTrue(signedIn().refreshing)

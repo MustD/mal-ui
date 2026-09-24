@@ -7,19 +7,21 @@ import kotlinx.coroutines.flow.update
 import kotlin.coroutines.cancellation.CancellationException
 
 /**
- * Everything the Anime List screen can be in, as one value.
+ * The pager's own bookkeeping: what is loaded, what is in flight, and what failed.
  *
- * The two failures are **separate fields, not one nullable error**, because the screen does
- * genuinely different things with them: a failed first page is a full-screen error, while a failed
- * later page must leave every loaded entry exactly where it was and offer a retry at the bottom.
- * Collapsing them would leave the UI inferring which is which from "is the list empty", which is
- * wrong for an empty list whose *first* page failed.
+ * Private, and deliberately so. Which screen a combination of these means is [toState]'s to decide —
+ * in one place, into a value with one variant per screen — so nothing outside the pager ever reads a
+ * flag and re-decides it. Their invariants still matter, and are the pager's alone to keep.
+ *
+ * The two failures are **separate fields, not one nullable error**, because they are genuinely
+ * different outcomes: a failed first page is a full-screen error, while a failed later page must leave
+ * every loaded entry exactly where it was and offer a retry at the bottom.
  */
-data class AnimeListState(
+private data class Paging(
     val entries: List<AnimeListEntry> = emptyList(),
     val watchStatus: WatchStatus? = null,
     val sortOrder: AnimeListSortOrder = AnimeListSortOrder.LastUpdated,
-    /** A page is in flight and there is nothing loaded to keep on screen behind it. */
+    /** A first page is in flight — with or without the previous query's entries still behind it. */
     val loadingFirstPage: Boolean = false,
     val loadingMore: Boolean = false,
     val firstPageError: String? = null,
@@ -31,17 +33,16 @@ data class AnimeListState(
      * asked yet", which are the same [entries] and must not be the same screen.
      */
     val loaded: Boolean = false,
-    /**
-     * Bumped every time a first page *replaces* [entries] — a filter change, a Sort Order change, a
-     * reload, or the retry of a failed first page.
-     *
-     * It is here rather than being inferred by the screen because a replacement is not visible in
-     * any other field: the entries can come back identical, and `loadingFirstPage` has already gone
-     * false again by the time anything collects. What the screen does with it is scroll back to the
-     * top, and a scroll position into a list that no longer exists is what it is avoiding.
-     */
+    /** See [AnimeListState.revision]. */
     val revision: Int = 0,
 ) {
+    fun toState(): AnimeListState = AnimeListState(
+        content = content(),
+        watchStatus = watchStatus,
+        sortOrder = sortOrder,
+        revision = revision,
+    )
+
     /**
      * Which of its screens the list is, decided from the fields above — one variant for every
      * reachable combination of them.
@@ -53,55 +54,23 @@ data class AnimeListState(
      * over — nothing asked for, or a request abandoned before it landed — has nothing to show and
      * nothing coming, which is [AnimeListContent.NotRequested].
      */
-    val content: AnimeListContent
-        get() {
-            firstPageError?.let { return AnimeListContent.FirstPageFailed(it) }
-            if (entries.isNotEmpty()) {
-                val tail = when {
-                    loadingMore -> AnimeListTail.LoadingMore
-                    moreError != null -> AnimeListTail.MoreFailed(moreError)
-                    exhausted -> AnimeListTail.End
-                    else -> AnimeListTail.Idle
-                }
-                return AnimeListContent.Entries(entries, tail, replacing = loadingFirstPage)
+    private fun content(): AnimeListContent {
+        firstPageError?.let { return AnimeListContent.FirstPageFailed(it) }
+        if (entries.isNotEmpty()) {
+            val tail = when {
+                loadingMore -> AnimeListTail.LoadingMore
+                moreError != null -> AnimeListTail.MoreFailed(moreError)
+                exhausted -> AnimeListTail.End
+                else -> AnimeListTail.Idle
             }
-            // `loadingMore` with nothing loaded cannot happen — a request over an empty list is always
-            // a first page — but if it did, a skeleton is what an empty screen with a page coming is.
-            if (loadingFirstPage || loadingMore) return AnimeListContent.FirstPageLoading
-            if (loaded && exhausted) return AnimeListContent.Empty
-            return AnimeListContent.NotRequested
+            return AnimeListContent.Entries(entries, tail, replacing = loadingFirstPage)
         }
-
-    /**
-     * Whether the filter and the Sort Order can be changed.
-     *
-     * Not while a first page is in flight, with or without the previous query's entries behind it:
-     * both controls go through the same reset, and a live control would invite a second pick against
-     * a list that has not changed yet — a pile of requests for lists the user has already moved past.
-     */
-    val queryControlsEnabled: Boolean
-        get() = when (val content = content) {
-            AnimeListContent.FirstPageLoading -> false
-            is AnimeListContent.Entries -> !content.replacing
-            else -> true
-        }
-
-    /**
-     * Whether scrolling towards the end of the list should ask for the next page.
-     *
-     * Only over entries, and only until MAL has said the list is over — so the trigger costs nothing
-     * at the bottom of a finished list and never fires over a skeleton or an error.
-     *
-     * **Stays armed through a page in flight, a failed page and a replacement.** Asking then is
-     * harmless — the pager drops it — while disarming is not: the trigger restarts when re-armed, and
-     * after a replacement a restarted trigger waits for the list to be back at the top, so a list
-     * disarmed for every page it loads would stop paging the moment the user had changed filter once.
-     */
-    val pagingArmed: Boolean
-        get() = when (val content = content) {
-            is AnimeListContent.Entries -> content.tail != AnimeListTail.End
-            else -> false
-        }
+        // `loadingMore` with nothing loaded cannot happen — a request over an empty list is always
+        // a first page — but if it did, a skeleton is what an empty screen with a page coming is.
+        if (loadingFirstPage || loadingMore) return AnimeListContent.FirstPageLoading
+        if (loaded && exhausted) return AnimeListContent.Empty
+        return AnimeListContent.NotRequested
+    }
 }
 
 /**
@@ -112,7 +81,7 @@ data class AnimeListState(
  *
  * **`offset` is driven from here.** MAL's `paging.next` is an absolute URL to `api.myanimelist.net`,
  * which the web target must never follow: it has to stay on the Relay's origin. Only its presence is
- * read, as [AnimeListState.exhausted].
+ * read, as [AnimeListTail.End].
  *
  * Every method suspends rather than launching into a scope of its own. A pager that owned a scope
  * would have to be closed, and its one caller — [AnimeListRepository], which already cancels a whole
@@ -127,8 +96,24 @@ internal class AnimeListPager(
     watchStatus: WatchStatus? = null,
     sortOrder: AnimeListSortOrder = AnimeListSortOrder.LastUpdated,
 ) {
-    private val _state = MutableStateFlow(AnimeListState(watchStatus = watchStatus, sortOrder = sortOrder))
+    private val paging = MutableStateFlow(Paging(watchStatus = watchStatus, sortOrder = sortOrder))
+    private val _state = MutableStateFlow(paging.value.toState())
+
+    /** The list as the screen sees it — the only public state a pager has. */
     val state: StateFlow<AnimeListState> = _state.asStateFlow()
+
+    /**
+     * Every change to [paging], and the only way one is published.
+     *
+     * The public value is re-derived from the latest bookkeeping after each change, so it is never
+     * older than the change that published it. Two changes racing on two threads could still publish
+     * out of order, which is one reason the pager is confined to one: [AnimeListRepository] runs it
+     * on `Dispatchers.Main.immediate`.
+     */
+    private fun update(transform: (Paging) -> Paging) {
+        paging.update(transform)
+        _state.value = paging.value.toState()
+    }
 
     /**
      * The offset the *next* request uses. Advanced only on success, so a retry re-requests the page
@@ -167,7 +152,7 @@ internal class AnimeListPager(
      * failing, forever. [retry] is the way back out of that, and a person asks for it.
      */
     suspend fun next() {
-        val current = _state.value
+        val current = paging.value
         if (current.exhausted || current.loadingFirstPage || current.loadingMore) return
         if (current.moreError != null || current.firstPageError != null) return
         load()
@@ -175,7 +160,7 @@ internal class AnimeListPager(
 
     /** Re-requests whichever page failed — [nextOffset] did not move when it did. */
     suspend fun retry() {
-        val current = _state.value
+        val current = paging.value
         if (current.loadingFirstPage || current.loadingMore) return
         load()
     }
@@ -187,12 +172,12 @@ internal class AnimeListPager(
      * than cleared first, so changing a filter does not flash the screen empty on every tap.
      */
     suspend fun reset(
-        watchStatus: WatchStatus? = _state.value.watchStatus,
-        sortOrder: AnimeListSortOrder = _state.value.sortOrder,
+        watchStatus: WatchStatus? = paging.value.watchStatus,
+        sortOrder: AnimeListSortOrder = paging.value.sortOrder,
     ) {
         nextOffset = 0
         generation++
-        _state.update {
+        update {
             it.copy(
                 watchStatus = watchStatus,
                 sortOrder = sortOrder,
@@ -228,7 +213,7 @@ internal class AnimeListPager(
      * the only thing left that can move, so it does, up to [MAX_EMPTY_PAGE_SCAN] pages.
      */
     private suspend fun load() {
-        val first = nextOffset == 0 || _state.value.entries.isEmpty()
+        val first = nextOffset == 0 || paging.value.entries.isEmpty()
         if (!begin(first)) return
         // Where a give-up rewinds to. A scan advances [nextOffset] across every hole it pages past,
         // so without this the retry offered when it runs out would resume *after* the run — a
@@ -240,7 +225,7 @@ internal class AnimeListPager(
         var emptyPages = 0
         try {
             while (true) {
-                val query = _state.value
+                val query = paging.value
                 val page = client.page(
                     offset = nextOffset,
                     limit = pageSize,
@@ -257,7 +242,7 @@ internal class AnimeListPager(
                 // so a proximity-driven `next()` cannot slip into the gap and request the offset
                 // this run is about to ask for itself.
                 val scanning = emptyHole && ++emptyPages < MAX_EMPTY_PAGE_SCAN
-                _state.update {
+                update {
                     it.copy(
                         // A hole changes nothing on screen. On a [reset] the entries behind this run
                         // are the *previous* query's and are deliberately still observable until the
@@ -293,7 +278,7 @@ internal class AnimeListPager(
             // the caller's problem, because there is no caller left. Unless a reset superseded
             // this, in which case the flags now belong to its load and must not be cleared here.
             if (mine == generation) {
-                _state.update { it.copy(loadingFirstPage = false, loadingMore = false) }
+                update { it.copy(loadingFirstPage = false, loadingMore = false) }
             }
             throw e
         } catch (e: Exception) {
@@ -317,7 +302,7 @@ internal class AnimeListPager(
      */
     private fun begin(first: Boolean): Boolean {
         var claimed = false
-        _state.update { current ->
+        update { current ->
             if (current.loadingFirstPage || current.loadingMore) {
                 claimed = false
                 current
@@ -343,7 +328,7 @@ internal class AnimeListPager(
      * state that is an error card floating over a stale list.
      */
     private fun fail(first: Boolean, message: String) {
-        _state.update {
+        update {
             if (first) {
                 it.copy(
                     entries = emptyList(),

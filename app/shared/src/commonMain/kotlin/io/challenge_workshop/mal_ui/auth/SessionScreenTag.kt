@@ -54,9 +54,9 @@ val ANIME_LIST_MORE_TAG: String = "$ANIME_LIST_TAG.more"
 /**
  * The first-page placeholder: the Anime List's own shape, drawn with nothing in it.
  *
- * Its own tag because "is the skeleton on screen" is the one question that cannot be asked of the
- * pager's state — `loadingFirstPage` says a request is in flight, not that the screen chose the
- * skeleton over a spinner, and the difference between the two is the whole of the state.
+ * Its own tag because "is the skeleton on screen" is a question about the drawing, not the value —
+ * `FirstPageLoading` says the screen should be a skeleton, not that it drew one rather than a
+ * spinner, and the difference between the two is the whole of the state.
  *
  * **On every placeholder, not on a wrapper around them**, so a test asks `onAllNodesWithTag`. The
  * placeholders are grid cells like the entries that replace them — which is the only way they can

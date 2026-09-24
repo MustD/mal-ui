@@ -28,7 +28,8 @@ import androidx.compose.ui.test.v2.runComposeUiTest
 import io.challenge_workshop.mal_ui.animelist.ANIME_LIST_SORT_ORDERS
 import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
 import io.challenge_workshop.mal_ui.animelist.AnimeListSortOrder
-import io.challenge_workshop.mal_ui.animelist.AnimeListState
+import io.challenge_workshop.mal_ui.animelist.AnimeListContent
+import io.challenge_workshop.mal_ui.animelist.AnimeListTail
 import io.challenge_workshop.mal_ui.animelist.MY_ANIME_LIST_URL
 import io.challenge_workshop.mal_ui.animelist.WatchStatus
 import io.challenge_workshop.mal_ui.animelist.sortLabel
@@ -49,8 +50,8 @@ import kotlin.test.assertTrue
  * The signed-in screen, which **is** the Anime List: the entries, the two Layouts, the five states a
  * page load can be in, and the three controls over it.
  *
- * *Which* of the five states a load is in is `AnimeListPager`'s and `ScreenStateSourceTest`'s, and
- * what a control *causes* is the pager's — all on four Targets. What only a rendering can answer is
+ * *Which* screen a load is, and what a control *causes*, are `:core`'s — `AnimeListPagerTest` and
+ * `AnimeListRepositoryTest`, on four Targets. What only a rendering can answer is
  * that each state reaches a different part of the screen, that a person can read what it says, and
  * that the control they tap is wired to the right action.
  */
@@ -150,11 +151,10 @@ class SignedInScreenTest {
     }
 
     /**
-     * The five Anime List screen states, each drawing its own part of the screen and none of the
-     * others'.
+     * Each Anime List screen, drawing its own part of the screen and none of the others'.
      *
-     * *Which* state a page load is in is `AnimeListPager`'s and `ScreenStateSourceTest`'s, on four
-     * Targets. What only a rendering can answer is that each reaches a different part of the screen —
+     * *Which* screen a page load is is `AnimeListPagerTest`'s, on four Targets; this builds each from
+     * its variant and asserts what it draws. What only a rendering can answer is that each reaches a different part of the screen —
      * collapsing an empty slice into an empty account, or a failed first page into the retry row at
      * the bottom, is the easiest mistake in this feature and is invisible in the state.
      *
@@ -165,11 +165,17 @@ class SignedInScreenTest {
     @Test
     fun each_anime_list_state_draws_its_own_part_of_the_screen() {
         val states = listOf(
-            ANIME_LIST_SKELETON_TAG to AnimeListState(loadingFirstPage = true),
-            ANIME_LIST_EMPTY_TAG to AnimeListState(loaded = true, exhausted = true),
-            ANIME_LIST_ERROR_TAG to AnimeListState(firstPageError = "MAL said no"),
-            ANIME_LIST_MORE_TAG to loadedList(moreError = "MAL said no", exhausted = false),
+            ANIME_LIST_SKELETON_TAG to listShowing(AnimeListContent.FirstPageLoading),
+            ANIME_LIST_EMPTY_TAG to listShowing(AnimeListContent.Empty),
+            ANIME_LIST_ERROR_TAG to listShowing(AnimeListContent.FirstPageFailed("MAL said no")),
+            ANIME_LIST_MORE_TAG to loadedList(tail = AnimeListTail.MoreFailed("MAL said no")),
+            ANIME_LIST_MORE_TAG to loadedList(tail = AnimeListTail.LoadingMore),
+            // A list that has ended, or has more nobody has asked for yet, draws its entries and
+            // nothing below them.
+            null to loadedList(tail = AnimeListTail.End),
+            null to loadedList(tail = AnimeListTail.Idle),
         )
+        val tags = states.mapNotNull { it.first }.distinct()
 
         for ((expected, list) in states) {
             runComposeUiTest {
@@ -178,11 +184,13 @@ class SignedInScreenTest {
                 // `onAllNodesWithTag`, because the skeleton is one tagged placeholder per grid cell
                 // rather than one tagged wrapper — which is what lets the grid lay the placeholders
                 // out at the very column width the cards replacing them will get.
-                assertTrue(
-                    onAllNodesWithTag(expected).fetchSemanticsNodes().isNotEmpty(),
-                    "$list drew nothing tagged $expected",
-                )
-                for ((other, _) in states.filterNot { it.first == expected }) {
+                if (expected != null) {
+                    assertTrue(
+                        onAllNodesWithTag(expected).fetchSemanticsNodes().isNotEmpty(),
+                        "$list drew nothing tagged $expected",
+                    )
+                }
+                for (other in tags.filterNot { it == expected }) {
                     onAllNodesWithTag(other).assertCountEquals(0)
                 }
             }
@@ -200,7 +208,7 @@ class SignedInScreenTest {
             setContent {
                 CompositionLocalProvider(LocalUriHandler provides RecordingUriHandler(opened)) {
                     SessionRoute(
-                        signedIn(list = AnimeListState(loaded = true, exhausted = true)),
+                        signedIn(list = listShowing(AnimeListContent.Empty)),
                         RecordedActions().actions,
                     )
                 }
@@ -232,7 +240,7 @@ class SignedInScreenTest {
         runComposeUiTest {
             setContent {
                 SessionRoute(
-                    signedIn(list = AnimeListState(loaded = true, exhausted = true, watchStatus = WatchStatus.OnHold)),
+                    signedIn(list = listShowing(AnimeListContent.Empty, watchStatus = WatchStatus.OnHold)),
                     actions.actions,
                 )
             }
@@ -253,15 +261,15 @@ class SignedInScreenTest {
     /**
      * Both retries, which are the way out of both failures.
      *
-     * `AnimeListPager.next()` will not re-request a page that failed, so without these buttons a
+     * The pager will not re-request a page that failed, so without these buttons a
      * scroll trigger that has given up is a dead end. What a retry then *does* — which offset it
      * re-requests, and what it keeps — is the pager's, on four Targets.
      */
     @Test
     fun both_failures_offer_a_retry_that_reaches_the_pager() {
         val failures = listOf(
-            "Retry" to AnimeListState(firstPageError = "MAL said no"),
-            "Try again" to loadedList(moreError = "MAL said no", exhausted = false),
+            "Retry" to listShowing(AnimeListContent.FirstPageFailed("MAL said no")),
+            "Try again" to loadedList(tail = AnimeListTail.MoreFailed("MAL said no")),
         )
         for ((label, list) in failures) {
             val actions = RecordedActions()
@@ -291,7 +299,7 @@ class SignedInScreenTest {
         runComposeUiTest {
             setContent {
                 SessionRoute(
-                    signedIn(list = loadedList(moreError = "MAL said no", exhausted = false)),
+                    signedIn(list = loadedList(tail = AnimeListTail.MoreFailed("MAL said no"))),
                     RecordedActions().actions,
                 )
             }
@@ -308,18 +316,19 @@ class SignedInScreenTest {
      * a scroll and nothing else.
      *
      * Which offsets that then produces is `AnimeListPagerTest`'s, on four Targets. What only a
-     * rendering can show is that scrolling reaches the trigger at all — and that an exhausted list
-     * costs nothing at its bottom, which is exactly where a user parks.
+     * rendering can show is that scrolling reaches the trigger at all — and that a list that has
+     * ended costs nothing at its bottom, which is exactly where a user parks. Whether it is armed is
+     * the value's `pagingArmed`, decided in `:core`.
      */
     @Test
-    fun scrolling_near_the_end_asks_for_the_next_page_unless_the_list_is_exhausted() {
+    fun scrolling_near_the_end_asks_for_the_next_page_unless_the_list_has_ended() {
         val many = (1..60).map { "Anime $it" }
-        for ((exhausted, expected) in listOf(false to listOf("loadMore"), true to emptyList())) {
+        for ((tail, expected) in listOf(AnimeListTail.Idle to listOf("loadMore"), AnimeListTail.End to emptyList())) {
             val actions = RecordedActions()
             runComposeUiTest {
                 setContent {
                     SessionRoute(
-                        signedIn(list = loadedList(titles = many, exhausted = exhausted)),
+                        signedIn(list = loadedList(titles = many, tail = tail)),
                         actions.actions,
                     )
                 }
@@ -327,7 +336,7 @@ class SignedInScreenTest {
                 onNodeWithTag(ANIME_LIST_TAG).performScrollToIndex(many.size)
                 waitForIdle()
 
-                assertEquals(expected, actions.calls.distinct(), "exhausted=$exhausted")
+                assertEquals(expected, actions.calls.distinct(), "tail=$tail")
             }
         }
     }
@@ -348,7 +357,7 @@ class SignedInScreenTest {
             var revision by mutableStateOf(0)
             setContent {
                 SessionRoute(
-                    signedIn(list = loadedList(titles = many, revision = revision)),
+                    signedIn(list = loadedList(titles = many, tail = AnimeListTail.End, revision = revision)),
                     RecordedActions().actions,
                 )
             }
@@ -378,7 +387,7 @@ class SignedInScreenTest {
             var loading by mutableStateOf(true)
             setContent {
                 SessionRoute(
-                    signedIn(list = loadedList().copy(loadingFirstPage = loading)),
+                    signedIn(list = loadedList(replacing = loading)),
                     RecordedActions().actions,
                 )
             }

@@ -17,7 +17,9 @@ import io.challenge_workshop.mal_ui.animelist.AiringStatus
 import io.challenge_workshop.mal_ui.animelist.AnimeListEntry
 import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
 import io.challenge_workshop.mal_ui.animelist.AnimeListSortOrder
+import io.challenge_workshop.mal_ui.animelist.AnimeListContent
 import io.challenge_workshop.mal_ui.animelist.AnimeListState
+import io.challenge_workshop.mal_ui.animelist.AnimeListTail
 import io.challenge_workshop.mal_ui.animelist.WatchStatus
 import io.challenge_workshop.mal_ui.auth.AuthorizingActions
 import io.challenge_workshop.mal_ui.auth.DiagnosticsActions
@@ -97,31 +99,32 @@ internal fun signedIn(
 )
 
 /**
- * A first page that has landed and exhausted the pager, which is the resting state of the signed-in
- * screen.
+ * Entries on screen, all of the list there is — the resting state of the signed-in screen.
  *
- * `exhausted` defaults to true because it is load-bearing rather than decoration: an empty first page
- * that still carries a `paging.next` is a hole the pager is paging past, not an empty list, so it is
- * part of the condition both empty states are drawn under.
+ * [tail] defaults to [AnimeListTail.End] so a case that is about the entries is not also about paging:
+ * a list that has ended arms no trigger, so scrolling it asks for nothing.
  */
 internal fun loadedList(
     titles: List<String> = FIXTURE_TITLES,
     watchStatus: WatchStatus? = null,
     sortOrder: AnimeListSortOrder = AnimeListSortOrder.LastUpdated,
-    exhausted: Boolean = true,
+    tail: AnimeListTail = AnimeListTail.End,
+    replacing: Boolean = false,
     revision: Int = 0,
-    loadingMore: Boolean = false,
-    moreError: String? = null,
 ) = AnimeListState(
-    entries = titles.mapIndexed { index, title -> listEntry(id = index + 1L, title = title) },
+    content = AnimeListContent.Entries(
+        entries = titles.mapIndexed { index, title -> listEntry(id = index + 1L, title = title) },
+        tail = tail,
+        replacing = replacing,
+    ),
     watchStatus = watchStatus,
     sortOrder = sortOrder,
-    exhausted = exhausted,
-    loaded = true,
     revision = revision,
-    loadingMore = loadingMore,
-    moreError = moreError,
 )
+
+/** Any of the Anime List screens that has no entries on it. */
+internal fun listShowing(content: AnimeListContent, watchStatus: WatchStatus? = null) =
+    AnimeListState(content = content, watchStatus = watchStatus)
 
 /**
  * One List Entry carrying every fact the spec asks it to.

@@ -41,6 +41,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.challenge_workshop.mal_ui.animelist.AnimeListContent
 import io.challenge_workshop.mal_ui.animelist.AnimeListFilters
 import io.challenge_workshop.mal_ui.animelist.AnimeListSortMenu
 import io.challenge_workshop.mal_ui.animelist.LoadMoreWhenNearEnd
@@ -241,15 +242,12 @@ fun SignedInScreen(
     val layout = state.layout
     val contentWidth = Modifier.widthIn(max = layout.contentMaxWidth()).fillMaxWidth()
 
-    // Armed on `loaded`, not on "there are entries": a first page can come back empty and still
-    // carry a `paging.next`, and a pager that is not exhausted with no way left to ask it for more
-    // is a list that has silently stopped. Disarmed once exhausted, so the trigger costs nothing at
-    // the bottom of a finished list.
+    // Whether to arm it is `:core`'s decision, not this screen's — see `AnimeListState.pagingArmed`.
     LoadMoreWhenNearEnd(
         gridState = gridState,
-        loadedCount = list.entries.size,
+        loadedCount = (list.content as? AnimeListContent.Entries)?.entries?.size ?: 0,
         revision = list.revision,
-        enabled = list.loaded && !list.exhausted,
+        enabled = list.pagingArmed,
         onLoadMore = actions.onLoadMore,
     )
 
@@ -290,10 +288,9 @@ fun SignedInScreen(
         Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).then(contentWidth)) {
             AnimeListFilters(
                 selected = list.watchStatus,
-                // Both are disabled by the same flag, because both go through the same reset: the
-                // entries on screen are the previous query's until the replacement lands, so a live
-                // control would invite a second pick against a list that has not changed yet.
-                enabled = !list.loadingFirstPage,
+                // Both read the same decision, because both go through the same reset — see
+                // `AnimeListState.queryControlsEnabled`.
+                enabled = list.queryControlsEnabled,
                 onSelect = actions.onSelectWatchStatus,
             )
             // Still a `FlowRow` with one child in it, now that the Layout toggle has gone to the
@@ -309,7 +306,7 @@ fun SignedInScreen(
             ) {
                 AnimeListSortMenu(
                     selected = list.sortOrder,
-                    enabled = !list.loadingFirstPage,
+                    enabled = list.queryControlsEnabled,
                     onSelect = actions.onSelectSortOrder,
                 )
             }

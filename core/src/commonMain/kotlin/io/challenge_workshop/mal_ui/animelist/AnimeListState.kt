@@ -1,6 +1,61 @@
 package io.challenge_workshop.mal_ui.animelist
 
 /**
+ * The Anime List as the screen sees it: which of its screens it is, the query it is of, and the two
+ * decisions about the controls around it.
+ *
+ * Everything here is decided in `:core`. The screen draws [content] and reads the two decisions; it
+ * makes none of its own, and there is no flag left for it to combine. The paging facts these are
+ * decided from are the pager's private bookkeeping.
+ */
+data class AnimeListState(
+    val content: AnimeListContent = AnimeListContent.NotRequested,
+    val watchStatus: WatchStatus? = null,
+    val sortOrder: AnimeListSortOrder = AnimeListSortOrder.LastUpdated,
+    /**
+     * Bumped every time a first page *replaces* what is on screen — the first page of a Session, a
+     * filter change, a Sort Order change, a Reload, or the retry of a failed first page.
+     *
+     * It is here rather than being inferred by the screen because a replacement is not visible in
+     * [content] alone: the entries can come back identical, and `replacing` has already gone false
+     * again by the time anything collects. What the screen does with it is scroll back to the top,
+     * and a scroll position into a list that no longer exists is what it is avoiding.
+     */
+    val revision: Int = 0,
+) {
+    /**
+     * Whether the filter and the Sort Order can be changed.
+     *
+     * Not while a first page is in flight, with or without the previous query's entries behind it:
+     * both controls go through the same reset, and a live control would invite a second pick against
+     * a list that has not changed yet — a pile of requests for lists the user has already moved past.
+     */
+    val queryControlsEnabled: Boolean
+        get() = when (val content = content) {
+            AnimeListContent.FirstPageLoading -> false
+            is AnimeListContent.Entries -> !content.replacing
+            else -> true
+        }
+
+    /**
+     * Whether scrolling towards the end of the list should ask for the next page.
+     *
+     * Only over entries, and only until MAL has said the list is over — so the trigger costs nothing
+     * at the bottom of a finished list and never fires over a skeleton or an error.
+     *
+     * **Stays armed through a page in flight, a failed page and a replacement.** Asking then is
+     * harmless — the pager drops it — while disarming is not: the trigger restarts when re-armed, and
+     * after a replacement a restarted trigger waits for the list to be back at the top, so a list
+     * disarmed for every page it loads would stop paging the moment the user had changed filter once.
+     */
+    val pagingArmed: Boolean
+        get() = when (val content = content) {
+            is AnimeListContent.Entries -> content.tail != AnimeListTail.End
+            else -> false
+        }
+}
+
+/**
  * Which of its screens the Anime List is — one variant per thing the screen can show, and never two
  * at once.
  *

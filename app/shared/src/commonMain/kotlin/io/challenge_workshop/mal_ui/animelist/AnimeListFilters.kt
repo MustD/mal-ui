@@ -82,7 +82,7 @@ fun WatchStatus.emptyListMessage(): String = when (this) {
  * of a phone and one scrolling row is the arrangement that works unchanged on all four Targets.
  *
  * [enabled] is false while the replacement first page is in flight. The previously loaded entries
- * stay on screen behind it — see [AnimeListPager.reset] — so without this the row would invite a
+ * stay on screen behind it until the replacement lands, so without this the row would invite a
  * second tap against a list that has not changed yet.
  */
 @Composable

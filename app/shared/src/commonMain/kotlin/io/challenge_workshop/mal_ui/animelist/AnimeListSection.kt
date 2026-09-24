@@ -48,8 +48,10 @@ import kotlinx.coroutines.flow.first
  * five screen states below, and switching Layout would drop the user's scroll position on the floor
  * — which is what the Layout toggle would then have to be forgiven for, on every tap.
  *
- * Everything this screen can be *other* than a list of entries is here: the skeleton, the two empty
- * states, and the two failures, each read off `AnimeListPager`'s own fields.
+ * Everything this screen can be *other* than a list of entries is here too: the skeleton, the two
+ * empty states, and the two failures. Which of them it is is not decided here — it is
+ * [AnimeListState.content], decided in `:core` and tested on four Targets — so this is a `when` over
+ * that value and draws each variant, with no condition of its own.
  */
 fun LazyGridScope.animeListItems(
     state: AnimeListState,
@@ -61,17 +63,14 @@ fun LazyGridScope.animeListItems(
         Text("Your Anime List", style = MaterialTheme.typography.titleMedium)
     }
 
-    // The five screen states, in the order they can happen. They are mutually exclusive by
-    // construction rather than by an `else`: a failed first page has no entries and is not loading,
-    // a reset clears `exhausted` before it starts, and `loaded` is false until a page has landed.
-    // Which of them a state is comes off the pager's own fields — none of it is inferred from "is
-    // the list empty", which is the one question that cannot tell a failed first page from an empty
-    // account.
+    when (val content = state.content) {
+        // Nothing asked for: only ever outside a Session, so only for the frame this screen is on its
+        // way out. The heading alone is the honest thing to draw.
+        AnimeListContent.NotRequested -> Unit
 
-    // (1) First page loading. Only while there is nothing behind it: a reload or a filter change
-    // keeps the loaded entries on screen instead, which is what stops the screen flashing on a tap.
-    if (state.loadingFirstPage && state.entries.isEmpty()) {
-        items(SKELETON_ITEMS) {
+        // A first page with nothing behind it. A reset keeps the previous entries on screen instead
+        // — that is `Entries` with `replacing` — which is what stops the screen flashing on a tap.
+        AnimeListContent.FirstPageLoading -> items(SKELETON_ITEMS) {
             // Ordinary cells, not one spanning item with its own row of placeholders inside. A
             // skeleton is a promise about the shape the content arrives in, and the only thing that
             // can keep that promise on an `Adaptive` grid — whose columns stretch to whatever width
@@ -83,99 +82,109 @@ fun LazyGridScope.animeListItems(
                 AnimeListLayout.List -> AnimeRowSkeleton(Modifier.testTag(ANIME_LIST_SKELETON_TAG))
             }
         }
-    }
 
-    // (5) First page failed. Nothing is loaded — `AnimeListPager.fail` discards on a first page
-    // precisely so this cannot become an error card floating over somebody else's slice — so this
-    // *is* the screen, and it reuses `ErrorCard` rather than growing one of its own.
-    state.firstPageError?.let { message ->
-        item(span = fullLineSpan) {
+        // Nothing is loaded — a failed first page discards whatever it was replacing, so this cannot
+        // become an error card floating over somebody else's slice — so this *is* the screen, and it
+        // reuses `ErrorCard` rather than growing one of its own.
+        is AnimeListContent.FirstPageFailed -> item(span = fullLineSpan) {
             Column(
                 Modifier.testTag(ANIME_LIST_ERROR_TAG),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                ErrorCard("Could not load your Anime List", message)
-                OutlinedButton(onClick = onRetry, enabled = !state.loadingFirstPage) { Text("Retry") }
+                ErrorCard("Could not load your Anime List", content.message)
+                OutlinedButton(onClick = onRetry) { Text("Retry") }
             }
         }
-    }
 
-    // (2) and (3): an empty account, and a filter that matched nothing. Two states and not one,
-    // because the fix for each is different and collapsing them tells a user with four hundred
-    // completed shows that their MyAnimeList is empty.
-    //
-    // `exhausted` is part of the condition, not decoration: a first page can come back empty and
-    // still carry a `paging.next`, in which case MAL has just said the opposite of both of these.
-    // `AnimeListPager` pages past that hole rather than leaving it on screen, so while it does, this
-    // is still state (1) above.
-    if (state.loaded && state.exhausted && state.entries.isEmpty() && state.firstPageError == null) {
-        val watchStatus = state.watchStatus
-        item(span = fullLineSpan) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    watchStatus?.emptyListMessage() ?: "You have nothing on your MyAnimeList yet.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.testTag(ANIME_LIST_EMPTY_TAG),
-                )
-                if (watchStatus == null) {
-                    // The way out of an empty account is not in this app: this release only reads,
-                    // so there is nothing here that could add the first entry.
-                    val uriHandler = LocalUriHandler.current
-                    OutlinedButton(onClick = { uriHandler.openUri(MY_ANIME_LIST_URL) }) {
-                        Text("Open myanimelist.net")
-                    }
-                } else {
-                    // The way out of an empty slice is one tap, rather than the user having to work
-                    // out that the chip they tapped is what emptied the screen.
-                    OutlinedButton(onClick = onShowAll) { Text("Show all") }
+        // An empty account, and a filter that matched nothing: one variant, two screens, because the
+        // fix for each is different and collapsing them tells a user with four hundred completed
+        // shows that their MyAnimeList is empty. The Watch Status beside the variant says which.
+        AnimeListContent.Empty -> item(span = fullLineSpan) {
+            EmptyAnimeList(state.watchStatus, onShowAll)
+        }
+
+        is AnimeListContent.Entries -> {
+            // Deliberately **unkeyed**. The obvious key is the anime id, and a duplicate one is a
+            // hard crash in a lazy layout — which is reachable, because `list_updated_at` reorders
+            // under us between two page requests and can hand the same entry back on both sides of
+            // a page boundary. Nothing here needs keys: pages only ever append, so positional
+            // identity is already stable.
+            //
+            // One cell each, and the Layout is what decides how many cells fit a line — the grid's
+            // own `GridCells`, chosen in `SignedInScreen`. That is the whole of the difference
+            // between the two Layouts, which is why there is no second copy of anything here.
+            val entries = content.entries
+            items(entries.size) { index ->
+                val entry = entries[index]
+                when (layout) {
+                    AnimeListLayout.Cards -> AnimeListCard(entry)
+                    // No divider under a dense row. The rows are grid cells and the grid spaces them
+                    // itself, so a rule drawn at the bottom of each one lands 8dp above the next row
+                    // rather than between the two — a line that belongs to nothing.
+                    AnimeListLayout.List -> AnimeListRow(entry)
                 }
             }
+            animeListTail(content.tail, onRetry)
         }
     }
+}
 
-    // Deliberately **unkeyed**. The obvious key is the anime id, and a duplicate one is a hard crash
-    // in a lazy layout — which is reachable, because `list_updated_at` reorders under us between two
-    // page requests and can hand the same entry back on both sides of a page boundary. Nothing here
-    // needs keys: pages only ever append, so positional identity is already stable.
-    //
-    // One cell each, and the Layout is what decides how many cells fit a line — the grid's own
-    // `GridCells`, chosen in `SignedInScreen`. That is the whole of the difference between the two
-    // Layouts, which is why there is no second copy of anything above or below this.
-    items(state.entries.size) { index ->
-        val entry = state.entries[index]
-        when (layout) {
-            AnimeListLayout.Cards -> AnimeListCard(entry)
-            // No divider under a dense row any more. The rows are grid cells now and the grid
-            // spaces them itself, so a rule drawn at the bottom of each one lands 8dp above the next
-            // row rather than between the two — a line that belongs to nothing.
-            AnimeListLayout.List -> AnimeListRow(entry)
+/** The one or two ways out of an empty Anime List, which depend on whether it is filtered. */
+@Composable
+private fun EmptyAnimeList(watchStatus: WatchStatus?, onShowAll: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            watchStatus?.emptyListMessage() ?: "You have nothing on your MyAnimeList yet.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag(ANIME_LIST_EMPTY_TAG),
+        )
+        if (watchStatus == null) {
+            // The way out of an empty account is not in this app: this release only reads, so there
+            // is nothing here that could add the first entry.
+            val uriHandler = LocalUriHandler.current
+            OutlinedButton(onClick = { uriHandler.openUri(MY_ANIME_LIST_URL) }) {
+                Text("Open myanimelist.net")
+            }
+        } else {
+            // The way out of an empty slice is one tap, rather than the user having to work out that
+            // the chip they tapped is what emptied the screen.
+            OutlinedButton(onClick = onShowAll) { Text("Show all") }
         }
     }
+}
 
-    // The bottom of an unbounded list, which is where the user finds out whether there is more.
-    val moreError = state.moreError
-    if (state.loadingMore || moreError != null) {
-        item(span = fullLineSpan) {
+/**
+ * The bottom of an unbounded list, which is where the user finds out whether there is more.
+ *
+ * Nothing at all for [AnimeListTail.Idle] and [AnimeListTail.End]: the first is about to become a
+ * page by scrolling, and the second is a list that has simply finished.
+ */
+private fun LazyGridScope.animeListTail(tail: AnimeListTail, onRetry: () -> Unit) {
+    when (tail) {
+        AnimeListTail.Idle, AnimeListTail.End -> Unit
+
+        AnimeListTail.LoadingMore -> item(span = fullLineSpan) {
+            Row(
+                Modifier.testTag(ANIME_LIST_MORE_TAG),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                CircularProgressIndicator(Modifier.padding(4.dp))
+                Text("Loading more…", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+
+        // A later page failed. Everything already loaded stays exactly where it is: a transient
+        // failure at the bottom must not cost the user their place, and the retry re-requests only
+        // the offset that failed.
+        is AnimeListTail.MoreFailed -> item(span = fullLineSpan) {
             Column(
                 Modifier.testTag(ANIME_LIST_MORE_TAG),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (moreError != null) {
-                    // (4) A later page failed. Everything already loaded stays exactly where it
-                    // is: a transient failure at the bottom must not cost the user their place, and
-                    // the retry re-requests only the offset that failed.
-                    ErrorCard("Could not load more", moreError)
-                    OutlinedButton(onClick = onRetry) { Text("Try again") }
-                } else {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        CircularProgressIndicator(Modifier.padding(4.dp))
-                        Text("Loading more…", style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
+                ErrorCard("Could not load more", tail.message)
+                OutlinedButton(onClick = onRetry) { Text("Try again") }
             }
         }
     }
@@ -220,11 +229,11 @@ internal val fullLineSpan: LazyGridItemSpanScope.() -> GridItemSpan = { GridItem
  * first page has been looked at. So the effect restarts on a new revision and waits for the list to
  * be back at the top, which is where the screen has already asked it to go.
  *
- * [enabled] is the caller's business: it is what stops this asking a pager that is exhausted or has
- * not loaded anything yet.
+ * [enabled] is [AnimeListState.pagingArmed], decided in `:core`: it is what stops this asking over
+ * a list that has ended or has nothing on it yet.
  *
  * Being asked more often than a page is wanted is normal and expected — a fling crosses the
- * threshold on every frame. `AnimeListPager` holds every guard against that; nothing here counts.
+ * threshold on every frame. The pager in `:core` holds every guard against that; nothing here counts.
  */
 @Composable
 fun LoadMoreWhenNearEnd(

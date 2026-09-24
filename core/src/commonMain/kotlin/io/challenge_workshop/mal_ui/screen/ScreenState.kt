@@ -68,8 +68,8 @@ sealed interface ScreenState {
      * There is a Session, so the screen **is** the Anime List.
      *
      * [list] nests [AnimeListState] verbatim rather than restating its fields. That value already
-     * carries the argument for why its two failures are separate fields and not one nullable error;
-     * a second copy of that reasoning in a second file drifts on the next state added.
+     * says which of its screens the list is, and a second copy of that decision in a second file
+     * drifts on the next screen added.
      *
      * [refreshing] is the *Session* refreshing, not the list — it draws as a spinner beside the name
      * precisely because a refresh must not unmount this screen.
