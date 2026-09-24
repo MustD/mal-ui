@@ -37,6 +37,10 @@ data class AnimeListState(
             else -> true
         }
 
+    /** How many List Entries are on screen — what the paging trigger re-arms on. */
+    val entryCount: Int
+        get() = (content as? AnimeListContent.Entries)?.entries?.size ?: 0
+
     /**
      * Whether scrolling towards the end of the list should ask for the next page.
      *

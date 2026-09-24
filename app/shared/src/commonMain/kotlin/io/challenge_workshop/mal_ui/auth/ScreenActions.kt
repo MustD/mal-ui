@@ -2,9 +2,9 @@ package io.challenge_workshop.mal_ui.auth
 
 import androidx.compose.runtime.Immutable
 import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
+import io.challenge_workshop.mal_ui.animelist.AnimeListRepository
 import io.challenge_workshop.mal_ui.animelist.AnimeListSortOrder
 import io.challenge_workshop.mal_ui.animelist.LayoutPreference
-import io.challenge_workshop.mal_ui.animelist.AnimeListRepository
 import io.challenge_workshop.mal_ui.animelist.WatchStatus
 import io.challenge_workshop.mal_ui.screen.ScreenState
 
@@ -89,8 +89,8 @@ data class DiagnosticsActions(
 )
 
 /**
- * Wires the ViewModel, the Anime List and the Layout to the three actions records, in one place so `App()` and the rendering
- * tests cannot drift about what a control does.
+ * Wires the ViewModel, the Anime List and the Layout to the three actions records, in one place
+ * so `App()` and the rendering tests cannot drift about what a control does.
  *
  * Not a `@Composable` and not remembered here: the caller is what has to `remember` the result, since
  * the whole value of these records is being the *same object* across recompositions.

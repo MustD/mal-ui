@@ -30,6 +30,10 @@ import kotlinx.coroutines.launch
  * never the problem, one that outlived its Session was. The Layout is not this module's — it is a
  * device preference, [LayoutPreference], and carries over from one Session to the next.
  *
+ * Ending a Session cancels its requests, so none of them can *start* a token refresh afterwards. A
+ * refresh already under way when the Session ends is `MalSessionRepository`'s and finishes regardless
+ * — it is non-cancellable on purpose (KTOR-8285).
+ *
  * The operations do not suspend. Each launches into the current Session's own `Job`, which is what
  * ending the Session cancels, and outside a Session there is no `Job` and they do nothing.
  *
@@ -83,6 +87,17 @@ class AnimeListRepository(
         _state.value = AnimeListState()
     }
 
+    /**
+     * Whether picking this filter or Sort Order changes nothing: it is the one on screen, and its first
+     * page did not fail. Read off the pager's own state, inside the operation, rather than off [state]
+     * — that is a copy, and two quick taps must not both get past a copy that has not caught up yet.
+     */
+    private fun AnimeListState.isRepick(
+        watchStatus: WatchStatus? = this.watchStatus,
+        sortOrder: AnimeListSortOrder = this.sortOrder,
+    ): Boolean = this.watchStatus == watchStatus && this.sortOrder == sortOrder &&
+        content !is AnimeListContent.FirstPageFailed
+
     /** Runs [block] against the current Session's pager, under its `Job`. Nothing outside a Session. */
     private fun inSession(block: suspend (AnimeListPager) -> Unit) {
         val list = current ?: return
@@ -122,9 +137,9 @@ class AnimeListRepository(
      * to disturb.
      */
     fun setWatchStatus(watchStatus: WatchStatus?) {
-        val shown = _state.value
-        if (shown.watchStatus == watchStatus && shown.content !is AnimeListContent.FirstPageFailed) return
-        inSession { it.reset(watchStatus = watchStatus) }
+        inSession { pager ->
+            if (!pager.state.value.isRepick(watchStatus = watchStatus)) pager.reset(watchStatus = watchStatus)
+        }
     }
 
     /**
@@ -135,8 +150,8 @@ class AnimeListRepository(
      * the default is the one a Session should open on. The Layout is the choice that persists.
      */
     fun setSortOrder(sortOrder: AnimeListSortOrder) {
-        val shown = _state.value
-        if (shown.sortOrder == sortOrder && shown.content !is AnimeListContent.FirstPageFailed) return
-        inSession { it.reset(sortOrder = sortOrder) }
+        inSession { pager ->
+            if (!pager.state.value.isRepick(sortOrder = sortOrder)) pager.reset(sortOrder = sortOrder)
+        }
     }
 }

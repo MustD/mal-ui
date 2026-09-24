@@ -263,6 +263,14 @@ class AnimeListRepositoryTest {
         h.list.reload()
         h.awaitList { it.revision == 2 && it.settled() }
         assertEquals(2, h.mal.animeListRequests.size, "Reload is a request for exactly that")
+
+        // Two quick taps on the same new chip are one pick: the second is judged against the list the
+        // first has already asked for, not against a copy of the state that has not caught up.
+        h.list.setWatchStatus(WatchStatus.Completed)
+        h.list.setWatchStatus(WatchStatus.Completed)
+        h.awaitList { it.watchStatus == WatchStatus.Completed && it.settled() }
+        runCurrent()
+        assertEquals(3, h.mal.animeListRequests.size, "the second tap on the same chip asked for nothing")
         h.close()
     }
 

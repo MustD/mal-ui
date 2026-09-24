@@ -41,7 +41,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import io.challenge_workshop.mal_ui.animelist.AnimeListContent
 import io.challenge_workshop.mal_ui.animelist.AnimeListFilters
 import io.challenge_workshop.mal_ui.animelist.AnimeListSortMenu
 import io.challenge_workshop.mal_ui.animelist.LoadMoreWhenNearEnd
@@ -245,7 +244,7 @@ fun SignedInScreen(
     // Whether to arm it is `:core`'s decision, not this screen's — see `AnimeListState.pagingArmed`.
     LoadMoreWhenNearEnd(
         gridState = gridState,
-        loadedCount = (list.content as? AnimeListContent.Entries)?.entries?.size ?: 0,
+        loadedCount = list.entryCount,
         revision = list.revision,
         enabled = list.pagingArmed,
         onLoadMore = actions.onLoadMore,
