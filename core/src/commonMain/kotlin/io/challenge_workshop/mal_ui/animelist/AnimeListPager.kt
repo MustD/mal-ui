@@ -41,7 +41,68 @@ data class AnimeListState(
      * top, and a scroll position into a list that no longer exists is what it is avoiding.
      */
     val revision: Int = 0,
-)
+) {
+    /**
+     * Which of its screens the list is, decided from the fields above — one variant for every
+     * reachable combination of them.
+     *
+     * A failed first page wins outright, because failing one discards the entries. Entries on screen
+     * come next, whatever else is going on: a reset in flight behind them is [AnimeListContent.Entries]
+     * with `replacing`, not a skeleton. Only with nothing to show does a first page in flight become
+     * the skeleton, and only a list MAL has ended becomes [AnimeListContent.Empty]. Everything left
+     * over — nothing asked for, or a request abandoned before it landed — has nothing to show and
+     * nothing coming, which is [AnimeListContent.NotRequested].
+     */
+    val content: AnimeListContent
+        get() {
+            firstPageError?.let { return AnimeListContent.FirstPageFailed(it) }
+            if (entries.isNotEmpty()) {
+                val tail = when {
+                    loadingMore -> AnimeListTail.LoadingMore
+                    moreError != null -> AnimeListTail.MoreFailed(moreError)
+                    exhausted -> AnimeListTail.End
+                    else -> AnimeListTail.Idle
+                }
+                return AnimeListContent.Entries(entries, tail, replacing = loadingFirstPage)
+            }
+            // `loadingMore` with nothing loaded cannot happen — a request over an empty list is always
+            // a first page — but if it did, a skeleton is what an empty screen with a page coming is.
+            if (loadingFirstPage || loadingMore) return AnimeListContent.FirstPageLoading
+            if (loaded && exhausted) return AnimeListContent.Empty
+            return AnimeListContent.NotRequested
+        }
+
+    /**
+     * Whether the filter and the Sort Order can be changed.
+     *
+     * Not while a first page is in flight, with or without the previous query's entries behind it:
+     * both controls go through the same reset, and a live control would invite a second pick against
+     * a list that has not changed yet — a pile of requests for lists the user has already moved past.
+     */
+    val queryControlsEnabled: Boolean
+        get() = when (val content = content) {
+            AnimeListContent.FirstPageLoading -> false
+            is AnimeListContent.Entries -> !content.replacing
+            else -> true
+        }
+
+    /**
+     * Whether scrolling towards the end of the list should ask for the next page.
+     *
+     * Only over entries, and only until MAL has said the list is over — so the trigger costs nothing
+     * at the bottom of a finished list and never fires over a skeleton or an error.
+     *
+     * **Stays armed through a page in flight, a failed page and a replacement.** Asking then is
+     * harmless — the pager drops it — while disarming is not: the trigger restarts when re-armed, and
+     * after a replacement a restarted trigger waits for the list to be back at the top, so a list
+     * disarmed for every page it loads would stop paging the moment the user had changed filter once.
+     */
+    val pagingArmed: Boolean
+        get() = when (val content = content) {
+            is AnimeListContent.Entries -> content.tail != AnimeListTail.End
+            else -> false
+        }
+}
 
 /**
  * The Anime List's paging state machine: what has been loaded, what is in flight, and what failed.

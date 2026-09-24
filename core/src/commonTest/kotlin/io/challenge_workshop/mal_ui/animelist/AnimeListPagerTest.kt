@@ -14,7 +14,8 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -22,8 +23,9 @@ import kotlin.test.assertTrue
  * The primary seam for the Anime List: nearly everything that can be wrong is behind the pager, and
  * `:core:allTests` runs this on jvm, js, wasmJs and android.
  *
- * The assertions are on what a caller can observe — the entries the pager exposes, the markers
- * beside them, and the requests it made. In particular the **outgoing request is asserted, not just
+ * The assertions are on what a caller can observe — the [AnimeListContent] the pager says it is, and
+ * the requests it made. Never the flags that value is decided from: which screen a state *is* is the
+ * pager's answer to give, and a test that read the flags would be re-deciding it. In particular the **outgoing request is asserted, not just
  * the parsed result**: a wrong `fields` string still returns 200, and costs the UI its data with no
  * error anywhere.
  */
@@ -60,6 +62,15 @@ class AnimeListPagerTest {
 
     private fun page(vararg entries: FakeEntry, hasMore: Boolean = false): (Int) -> AnimeListResponse =
         { AnimeListResponse.Page(entries.toList(), hasMore) }
+
+    private val AnimeListPager.content: AnimeListContent get() = state.value.content
+
+    /** The entries on screen, which only [AnimeListContent.Entries] has. */
+    private fun AnimeListPager.shown(): AnimeListContent.Entries = assertIs(content)
+
+    private fun AnimeListPager.ids(): List<Long> = shown().entries.map { it.animeId }
+
+    private fun AnimeListState.tail(): AnimeListTail? = (content as? AnimeListContent.Entries)?.tail
 
     @Test
     fun the_first_page_asks_for_the_agreed_query() = runTest {
@@ -125,7 +136,7 @@ class AnimeListPagerTest {
 
         pager.start()
 
-        val entry = pager.state.value.entries.single()
+        val entry = pager.shown().entries.single()
         assertEquals(1L, entry.animeId)
         assertEquals("Cowboy Bebop", entry.title)
         assertEquals(26, entry.totalEpisodes)
@@ -137,8 +148,6 @@ class AnimeListPagerTest {
         assertEquals(9, entry.score)
         assertEquals(12, entry.episodesWatched)
         assertEquals("https://cdn.myanimelist.net/images/anime/4/1.jpg", entry.picture?.medium)
-        assertTrue(pager.state.value.loaded)
-        assertNull(pager.state.value.firstPageError)
     }
 
     @Test
@@ -158,7 +167,7 @@ class AnimeListPagerTest {
 
         pager.start()
 
-        val entry = pager.state.value.entries.single()
+        val entry = pager.shown().entries.single()
         assertEquals(WatchStatus.Unknown, entry.watchStatus)
         assertEquals(AiringStatus.Unknown, entry.airingStatus)
         // Not an enum at all, precisely so an unrecognised one is still displayable.
@@ -170,7 +179,7 @@ class AnimeListPagerTest {
         val (pager, mal) = pagerOver(page(FakeEntry(1, "Cowboy Bebop"), hasMore = false))
 
         pager.start()
-        assertTrue(pager.state.value.exhausted)
+        assertEquals(AnimeListTail.End, pager.shown().tail)
 
         pager.next()
 
@@ -191,7 +200,7 @@ class AnimeListPagerTest {
 
         assertContentEquals(
             listOf(1L, 2L, 3L, 4L),
-            pager.state.value.entries.map { it.animeId },
+            pager.ids(),
             "the second page must be appended after the first, in order",
         )
         assertEquals(listOf("0", "2"), mal.animeListRequests.map { it.parameters["offset"] })
@@ -217,7 +226,7 @@ class AnimeListPagerTest {
         pager.start()
 
         val inFlight = backgroundScope.launch { pager.next() }
-        pager.state.first { it.loadingMore }
+        pager.state.first { it.tail() == AnimeListTail.LoadingMore }
 
         pager.next()
 
@@ -228,7 +237,7 @@ class AnimeListPagerTest {
             mal.animeListRequests.map { it.parameters["offset"] },
             "the second `next()` landed while offset=2 was in flight and must have been a no-op",
         )
-        assertContentEquals(listOf(1L, 2L, 3L, 4L), pager.state.value.entries.map { it.animeId })
+        assertContentEquals(listOf(1L, 2L, 3L, 4L), pager.ids())
     }
 
     /**
@@ -247,7 +256,7 @@ class AnimeListPagerTest {
         )
         pager.start()
         pager.next()
-        assertNotNull(pager.state.value.moreError)
+        assertIs<AnimeListTail.MoreFailed>(pager.shown().tail)
 
         pager.next()
         pager.next()
@@ -271,7 +280,7 @@ class AnimeListPagerTest {
     @Test
     fun an_empty_page_that_is_not_the_end_is_paged_past_rather_than_shown() = runTest {
         lateinit var pager: AnimeListPager
-        val flagsWhileScanning = mutableListOf<Pair<Boolean, Boolean>>()
+        val contentWhileScanning = mutableListOf<AnimeListContent>()
         val (built, mal) = pagerOver(
             pageSize = 2,
             animeList = { offset ->
@@ -283,9 +292,7 @@ class AnimeListPagerTest {
             // first-page state while it does — not the "loading more" row at the bottom of a list
             // that has no entries in it.
             holdAnimeList = { offset ->
-                if (offset > 0) {
-                    flagsWhileScanning += pager.state.value.let { it.loadingFirstPage to it.loadingMore }
-                }
+                if (offset > 0) contentWhileScanning += pager.content
             },
         )
         pager = built
@@ -293,12 +300,12 @@ class AnimeListPagerTest {
         pager.start()
 
         assertEquals(listOf("0", "2", "4"), mal.animeListRequests.map { it.parameters["offset"] })
-        assertContentEquals(listOf(1L, 2L), pager.state.value.entries.map { it.animeId })
-        assertEquals(listOf(true to false, true to false), flagsWhileScanning)
-        val state = pager.state.value
-        assertTrue(state.exhausted)
-        assertTrue(!state.loadingFirstPage)
-        assertNull(state.firstPageError)
+        assertContentEquals(listOf(1L, 2L), pager.ids())
+        assertEquals(
+            listOf<AnimeListContent>(AnimeListContent.FirstPageLoading, AnimeListContent.FirstPageLoading),
+            contentWhileScanning,
+        )
+        assertEquals(AnimeListTail.End, pager.shown().tail)
     }
 
     /**
@@ -320,10 +327,8 @@ class AnimeListPagerTest {
         pager.start()
 
         assertEquals(AnimeListPager.MAX_EMPTY_PAGE_SCAN, mal.animeListRequests.size)
-        val gaveUp = pager.state.value
-        assertNotNull(gaveUp.firstPageError)
-        assertTrue(!gaveUp.loadingFirstPage)
-        assertTrue(!gaveUp.loaded, "nothing ever landed, so this must not read as an empty Anime List")
+        // Failed, not Empty: nothing ever landed, so this must not read as an empty Anime List.
+        assertIs<AnimeListContent.FirstPageFailed>(pager.content)
 
         // The retry has to go back to where the run *started*, not to where it gave up. Resuming at
         // the far end of a scan asks MAL for a position past the end of a list whose entries all sit
@@ -337,8 +342,7 @@ class AnimeListPagerTest {
             mal.animeListRequests.last().parameters["offset"],
             "the scan advanced past twenty holes, and the retry must not resume beyond them",
         )
-        assertContentEquals(listOf(1L, 2L), pager.state.value.entries.map { it.animeId })
-        assertNull(pager.state.value.firstPageError)
+        assertContentEquals(listOf(1L, 2L), pager.ids())
     }
 
     /**
@@ -352,7 +356,7 @@ class AnimeListPagerTest {
     fun a_hole_during_a_reset_does_not_empty_the_screen_before_the_replacement_lands() = runTest {
         lateinit var pager: AnimeListPager
         var filtering = false
-        val entriesWhileScanning = mutableListOf<List<Long>>()
+        val contentWhileScanning = mutableListOf<AnimeListContent>()
         val (built, _) = pagerOver(
             pageSize = 2,
             animeList = { offset ->
@@ -365,7 +369,7 @@ class AnimeListPagerTest {
             // Sampled from inside the request that follows the hole: this is the window in which the
             // old slice has to still be there.
             holdAnimeList = { offset ->
-                if (filtering && offset > 0) entriesWhileScanning += pager.state.value.entries.map { it.animeId }
+                if (filtering && offset > 0) contentWhileScanning += pager.content
             },
         )
         pager = built
@@ -374,8 +378,10 @@ class AnimeListPagerTest {
         filtering = true
         pager.reset(watchStatus = WatchStatus.OnHold)
 
-        assertEquals(listOf(listOf(1L, 2L)), entriesWhileScanning)
-        assertContentEquals(listOf(9L, 10L), pager.state.value.entries.map { it.animeId })
+        val whileScanning = assertIs<AnimeListContent.Entries>(contentWhileScanning.single())
+        assertEquals(listOf(1L, 2L), whileScanning.entries.map { it.animeId })
+        assertTrue(whileScanning.replacing, "the old slice is on screen as the thing being replaced")
+        assertContentEquals(listOf(9L, 10L), pager.ids())
     }
 
     /** The same hole, met halfway down a loaded list: paged past, and nothing on screen disturbed. */
@@ -396,8 +402,8 @@ class AnimeListPagerTest {
         pager.next()
 
         assertEquals(listOf("0", "2", "4"), mal.animeListRequests.map { it.parameters["offset"] })
-        assertContentEquals(listOf(1L, 2L, 3L, 4L), pager.state.value.entries.map { it.animeId })
-        assertNull(pager.state.value.moreError)
+        assertContentEquals(listOf(1L, 2L, 3L, 4L), pager.ids())
+        assertEquals(AnimeListTail.End, pager.shown().tail, "a hole is not a failure")
     }
 
     @Test
@@ -406,12 +412,11 @@ class AnimeListPagerTest {
 
         pager.start()
 
-        val state = pager.state.value
-        assertTrue(state.entries.isEmpty())
-        assertNotNull(state.firstPageError)
-        assertNull(state.moreError, "a first-page failure is not a 'more failed' — the screens differ")
-        assertTrue(!state.loadingFirstPage)
-        assertTrue(!state.loaded, "nothing landed, so this must not read as an empty Anime List")
+        // Not Empty — nothing landed, so this must not read as an empty Anime List — and not a
+        // failed tail, because there are no entries for one to be the bottom of.
+        assertIs<AnimeListContent.FirstPageFailed>(pager.content)
+        assertTrue(pager.state.value.queryControlsEnabled, "a failed filter can be picked again")
+        assertFalse(pager.state.value.pagingArmed)
     }
 
     @Test
@@ -426,8 +431,7 @@ class AnimeListPagerTest {
         pager.retry()
 
         assertEquals(listOf("0", "0"), mal.animeListRequests.map { it.parameters["offset"] })
-        assertEquals(1, pager.state.value.entries.size)
-        assertNull(pager.state.value.firstPageError)
+        assertEquals(1, pager.shown().entries.size)
     }
 
     @Test
@@ -444,30 +448,31 @@ class AnimeListPagerTest {
         pager.start()
         pager.next()
 
-        val failed = pager.state.value
-        assertEquals(listOf(1L, 2L), failed.entries.map { it.animeId }, "nothing loaded may be discarded")
-        assertNotNull(failed.moreError)
-        assertNull(failed.firstPageError, "the loaded page is still good — this is not a dead screen")
+        // Entries with a failed tail, not a failed first page: the loaded page is still good, and
+        // this is not a dead screen.
+        assertEquals(listOf(1L, 2L), pager.ids(), "nothing loaded may be discarded")
+        assertIs<AnimeListTail.MoreFailed>(pager.shown().tail)
+        assertTrue(pager.state.value.pagingArmed, "armed still — the pager is what refuses to re-ask")
 
         failFrom = Int.MAX_VALUE
         pager.retry()
 
         assertEquals(listOf("0", "2", "2"), mal.animeListRequests.map { it.parameters["offset"] })
-        assertContentEquals(listOf(1L, 2L, 3L, 4L), pager.state.value.entries.map { it.animeId })
-        assertNull(pager.state.value.moreError)
+        assertContentEquals(listOf(1L, 2L, 3L, 4L), pager.ids())
+        assertEquals(AnimeListTail.Idle, pager.shown().tail)
     }
 
     @Test
     fun reset_refetches_from_zero_and_keeps_the_old_entries_observable_until_it_lands() = runTest {
         lateinit var pager: AnimeListPager
         var resetting = false
-        val entriesWhileInFlight = mutableListOf<List<Long>>()
+        val stateWhileInFlight = mutableListOf<AnimeListState>()
         val (built, mal) = pagerOver(
             pageSize = 2,
             animeList = { _ ->
                 // Sampled from *inside* the request: this is exactly the window in which changing a
                 // filter must not flash the screen empty.
-                entriesWhileInFlight += pager.state.value.entries.map { it.animeId }
+                stateWhileInFlight += pager.state.value
                 if (resetting) {
                     AnimeListResponse.Page(fakeEntries(1, firstId = 100), hasMore = false)
                 } else {
@@ -481,16 +486,18 @@ class AnimeListPagerTest {
         resetting = true
         pager.reset(watchStatus = WatchStatus.Completed)
 
-        assertEquals(
-            listOf(1L, 2L),
-            entriesWhileInFlight.last(),
+        val replacing = assertIs<AnimeListContent.Entries>(
+            stateWhileInFlight.last().content,
             "the previously loaded entries must still be observable while the new first page is in flight",
         )
+        assertEquals(listOf(1L, 2L), replacing.entries.map { it.animeId })
+        assertTrue(replacing.replacing)
         assertEquals(listOf("0", "0"), mal.animeListRequests.map { it.parameters["offset"] })
         assertEquals("completed", mal.animeListRequests.last().parameters["status"])
-        assertEquals(listOf(100L), pager.state.value.entries.map { it.animeId }, "the old page is replaced, not appended")
+        assertEquals(listOf(100L), pager.ids(), "the old page is replaced, not appended")
+        assertFalse(pager.shown().replacing)
         assertEquals(WatchStatus.Completed, pager.state.value.watchStatus)
-        assertTrue(pager.state.value.exhausted, "the new page carries no `paging.next`")
+        assertEquals(AnimeListTail.End, pager.shown().tail, "the new page carries no `paging.next`")
     }
 
     /**
@@ -546,7 +553,7 @@ class AnimeListPagerTest {
 
         assertContentEquals(
             listOf(100L, 101L, 102L, 103L),
-            pager.state.value.entries.map { it.animeId },
+            pager.ids(),
             "the new list must page from its own start, with nothing of the old one left",
         )
         assertEquals(
@@ -586,14 +593,14 @@ class AnimeListPagerTest {
         pager.start()
 
         val stale = backgroundScope.launch { pager.next() }
-        pager.state.first { it.loadingMore }
+        pager.state.first { it.tail() == AnimeListTail.LoadingMore }
 
         filtered = true
         pager.reset(watchStatus = WatchStatus.Dropped)
 
         assertContentEquals(
             listOf(100L, 101L),
-            pager.state.value.entries.map { it.animeId },
+            pager.ids(),
             "the replacement page landed even though offset=2 still held the loading slot",
         )
 
@@ -602,10 +609,10 @@ class AnimeListPagerTest {
 
         assertContentEquals(
             listOf(100L, 101L),
-            pager.state.value.entries.map { it.animeId },
+            pager.ids(),
             "the superseded page must not append itself to the list of a different filter",
         )
-        assertTrue(pager.state.value.exhausted, "and must not undo the new page's exhaustion either")
+        assertEquals(AnimeListTail.End, pager.shown().tail, "and must not undo the new page's exhaustion either")
         assertEquals("dropped", mal.animeListRequests.last().parameters["status"])
     }
 
@@ -628,18 +635,14 @@ class AnimeListPagerTest {
             },
         )
         pager.start()
-        assertEquals(2, pager.state.value.entries.size)
+        assertEquals(2, pager.shown().entries.size)
 
         failing = true
         pager.reset(watchStatus = WatchStatus.PlanToWatch)
 
-        val state = pager.state.value
-        assertTrue(
-            state.entries.isEmpty(),
-            "the unfiltered entries are not the Plan to Watch slice, and the chip now says they are",
-        )
-        assertNotNull(state.firstPageError)
-        assertTrue(!state.loaded, "nothing landed, so this must not read as an empty filtered list")
+        // Failed, and nothing else: not the unfiltered entries — they are not the Plan to Watch slice,
+        // and the chip now says they are — and not Empty, because nothing landed.
+        assertIs<AnimeListContent.FirstPageFailed>(pager.content)
     }
 
     /**
@@ -669,7 +672,7 @@ class AnimeListPagerTest {
 
         assertContentEquals(
             listOf(100L, 101L, 102L, 103L),
-            pager.state.value.entries.map { it.animeId },
+            pager.ids(),
             "the re-ordered list must page from its own start, with nothing of the old order left",
         )
         assertEquals(
@@ -700,5 +703,146 @@ class AnimeListPagerTest {
         assertEquals(WatchStatus.Watching, pager.state.value.watchStatus)
         assertEquals("watching", mal.animeListRequests.last().parameters["status"])
         assertEquals("list_score", mal.animeListRequests.last().parameters["sort"])
+    }
+
+    // --- Each variant and each control decision, reached through the pager -------------------------
+
+    @Test
+    fun a_pager_that_has_asked_for_nothing_is_not_requested() = runTest {
+        val (pager, _) = pagerOver(page(FakeEntry(1, "Cowboy Bebop")))
+
+        assertEquals(AnimeListContent.NotRequested, pager.content)
+        assertTrue(pager.state.value.queryControlsEnabled)
+        assertFalse(pager.state.value.pagingArmed, "there is nothing to scroll towards the end of")
+    }
+
+    /** A first page with nothing behind it: the skeleton, with both controls and paging held off. */
+    @Test
+    fun a_first_page_in_flight_with_nothing_behind_it_is_loading_and_holds_the_controls() = runTest {
+        lateinit var pager: AnimeListPager
+        val whileInFlight = mutableListOf<AnimeListState>()
+        val (built, _) = pagerOver(
+            page(FakeEntry(1, "Cowboy Bebop")),
+            holdAnimeList = { whileInFlight += pager.state.value },
+        )
+        pager = built
+
+        pager.start()
+
+        val inFlight = whileInFlight.single()
+        assertEquals(AnimeListContent.FirstPageLoading, inFlight.content)
+        assertFalse(inFlight.queryControlsEnabled)
+        assertFalse(inFlight.pagingArmed)
+    }
+
+    /**
+     * MAL ending a list with nothing in it is [AnimeListContent.Empty] whatever the filter — and the
+     * Watch Status beside it is what lets the screen say which empty it is.
+     */
+    @Test
+    fun a_finished_list_with_nothing_in_it_is_empty_under_its_own_filter() = runTest {
+        for (watchStatus in listOf(null, WatchStatus.OnHold)) {
+            val (pager, _) = pagerOver(page(), watchStatus = watchStatus)
+
+            pager.start()
+
+            assertEquals(AnimeListContent.Empty, pager.content, "for $watchStatus")
+            assertEquals(watchStatus, pager.state.value.watchStatus)
+            assertTrue(pager.state.value.queryControlsEnabled)
+            assertFalse(pager.state.value.pagingArmed, "an empty list has no end to scroll towards")
+        }
+    }
+
+    /**
+     * Paging is armed over entries until MAL says the list is over — including while the next page is
+     * in flight, which a trigger disarmed for every page it asked for would have to re-arm from the
+     * top of the list. The controls stay usable throughout: a later page is not a replacement.
+     */
+    @Test
+    fun paging_is_armed_over_entries_until_the_end_of_the_list() = runTest {
+        lateinit var pager: AnimeListPager
+        val whileMoreInFlight = mutableListOf<AnimeListState>()
+        val (built, _) = pagerOver(
+            pageSize = 2,
+            animeList = { offset ->
+                AnimeListResponse.Page(fakeEntries(2, firstId = offset + 1L), hasMore = offset == 0)
+            },
+            holdAnimeList = { offset -> if (offset > 0) whileMoreInFlight += pager.state.value },
+        )
+        pager = built
+
+        pager.start()
+        assertEquals(AnimeListTail.Idle, pager.shown().tail)
+        assertTrue(pager.state.value.pagingArmed)
+        assertTrue(pager.state.value.queryControlsEnabled)
+
+        pager.next()
+        val loadingMore = whileMoreInFlight.single()
+        assertEquals(AnimeListTail.LoadingMore, loadingMore.tail())
+        assertTrue(loadingMore.pagingArmed)
+        assertTrue(loadingMore.queryControlsEnabled)
+
+        assertEquals(AnimeListTail.End, pager.shown().tail)
+        assertFalse(pager.state.value.pagingArmed, "nothing further to ask for")
+    }
+
+    /**
+     * A replacement in flight keeps the old entries on screen and paging armed, with the controls
+     * held off until it lands — the one state that is both "entries" and "a first page loading".
+     */
+    @Test
+    fun a_replacement_in_flight_keeps_its_entries_and_paging_and_holds_the_controls() = runTest {
+        lateinit var pager: AnimeListPager
+        var resetting = false
+        val whileReplacing = mutableListOf<AnimeListState>()
+        val (built, _) = pagerOver(
+            pageSize = 2,
+            animeList = { AnimeListResponse.Page(fakeEntries(2), hasMore = true) },
+            holdAnimeList = { if (resetting) whileReplacing += pager.state.value },
+        )
+        pager = built
+        pager.start()
+
+        resetting = true
+        pager.reset(sortOrder = AnimeListSortOrder.Score)
+
+        val replacing = whileReplacing.single()
+        assertEquals(
+            AnimeListContent.Entries(pager.shown().entries, AnimeListTail.Idle, replacing = true),
+            replacing.content,
+        )
+        assertFalse(replacing.queryControlsEnabled)
+        assertTrue(replacing.pagingArmed)
+        assertTrue(pager.state.value.queryControlsEnabled, "and usable again once it lands")
+    }
+
+    /**
+     * [AnimeListState.revision] counts replacements the user can see, which is what the screen scrolls
+     * back to the top for: a first page landing, and every reset landing. A later page is not one, and
+     * nor is a hole paged past on the way.
+     */
+    @Test
+    fun the_revision_counts_first_pages_landing_and_nothing_else() = runTest {
+        val (pager, _) = pagerOver(
+            pageSize = 2,
+            animeList = { offset ->
+                when (offset) {
+                    0 -> AnimeListResponse.Page(fakeEntries(2), hasMore = true)
+                    2 -> AnimeListResponse.Page(emptyList(), hasMore = true)
+                    else -> AnimeListResponse.Page(fakeEntries(2, firstId = 5), hasMore = true)
+                }
+            },
+        )
+        assertEquals(0, pager.state.value.revision)
+
+        pager.start()
+        assertEquals(1, pager.state.value.revision)
+
+        pager.next()
+        assertEquals(listOf(1L, 2L, 5L, 6L), pager.ids(), "a hole paged past on the way")
+        assertEquals(1, pager.state.value.revision, "appending is not replacing")
+
+        pager.reset()
+        assertEquals(2, pager.state.value.revision)
     }
 }

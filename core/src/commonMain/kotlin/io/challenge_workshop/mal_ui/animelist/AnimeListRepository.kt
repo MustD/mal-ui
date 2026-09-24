@@ -123,7 +123,7 @@ class AnimeListRepository(
      */
     fun setWatchStatus(watchStatus: WatchStatus?) {
         val shown = _state.value
-        if (shown.watchStatus == watchStatus && shown.firstPageError == null) return
+        if (shown.watchStatus == watchStatus && shown.content !is AnimeListContent.FirstPageFailed) return
         inSession { it.reset(watchStatus = watchStatus) }
     }
 
@@ -136,7 +136,7 @@ class AnimeListRepository(
      */
     fun setSortOrder(sortOrder: AnimeListSortOrder) {
         val shown = _state.value
-        if (shown.sortOrder == sortOrder && shown.firstPageError == null) return
+        if (shown.sortOrder == sortOrder && shown.content !is AnimeListContent.FirstPageFailed) return
         inSession { it.reset(sortOrder = sortOrder) }
     }
 }

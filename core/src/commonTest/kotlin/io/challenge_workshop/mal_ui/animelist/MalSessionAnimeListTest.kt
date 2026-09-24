@@ -12,7 +12,7 @@ import io.challenge_workshop.mal_ui.session.VALID_TOKENS
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
+import kotlin.test.assertIs
 
 /**
  * The Anime List over the repository's **own** authenticated client, rather than over a second one
@@ -43,8 +43,7 @@ class MalSessionAnimeListTest {
 
         pager.start()
 
-        assertEquals(3, pager.state.value.entries.size)
-        assertNull(pager.state.value.firstPageError)
+        assertEquals(3, assertIs<AnimeListContent.Entries>(pager.state.value.content).entries.size)
         assertEquals(1, mal.tokenEndpointHits, "the 401 must have driven exactly one refresh")
         assertEquals(
             listOf("Bearer stale-access", "Bearer fresh-access"),

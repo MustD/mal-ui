@@ -51,9 +51,11 @@ class AnimeListRepositoryTest {
         suspend fun awaitList(predicate: (AnimeListState) -> Boolean): AnimeListState =
             list.state.first(predicate)
 
-        /** A first page has landed and nothing is in flight. */
-        suspend fun awaitSettled(): AnimeListState =
-            awaitList { it.loaded && !it.loadingFirstPage && !it.loadingMore }
+        /** Entries on screen, and nothing in flight behind or below them. */
+        suspend fun awaitSettled(): List<AnimeListEntry> =
+            (awaitList { it.settled() }.content as AnimeListContent.Entries).entries
+
+        suspend fun awaitFailed(): AnimeListState = awaitList { it.content is AnimeListContent.FirstPageFailed }
 
         /** The list a Session that has ended leaves behind: nothing at all. */
         suspend fun awaitDiscarded(): AnimeListState = awaitList { it == AnimeListState() }
@@ -104,7 +106,7 @@ class AnimeListRepositoryTest {
 
         h.session.restore()
 
-        assertEquals(3, h.awaitSettled().entries.size)
+        assertEquals(3, h.awaitSettled().size)
         assertEquals(1, h.mal.animeListRequests.size, "nothing on screen asked — the Session starting did")
         h.close()
     }
@@ -118,7 +120,7 @@ class AnimeListRepositoryTest {
 
         h.signIn()
 
-        assertEquals(3, h.awaitSettled().entries.size)
+        assertEquals(3, h.awaitSettled().size)
         assertEquals(1, h.mal.animeListRequests.size)
         h.close()
     }
@@ -133,19 +135,19 @@ class AnimeListRepositoryTest {
         h.session.restore()
         h.awaitSettled()
         h.list.setWatchStatus(WatchStatus.OnHold)
-        h.awaitList { it.watchStatus == WatchStatus.OnHold && it.loaded && !it.loadingFirstPage }
+        h.awaitList { it.watchStatus == WatchStatus.OnHold && it.settled() }
         h.list.setSortOrder(AnimeListSortOrder.Title)
-        h.awaitList { it.sortOrder == AnimeListSortOrder.Title && it.loaded && !it.loadingFirstPage }
+        h.awaitList { it.sortOrder == AnimeListSortOrder.Title && it.settled() }
 
         h.session.signOut()
         h.awaitDiscarded()
 
         h.signIn()
-        val fresh = h.awaitSettled()
+        assertEquals(3, h.awaitSettled().size)
+        val fresh = h.list.state.value
 
         assertNull(fresh.watchStatus, "the next Session opens unfiltered")
         assertEquals(AnimeListSortOrder.LastUpdated, fresh.sortOrder, "and on the default Sort Order")
-        assertEquals(3, fresh.entries.size)
         assertEquals(4, h.mal.animeListRequests.size, "the new Session asked for its own first page")
         assertNull(h.mal.statuses.last())
         assertEquals(AnimeListSortOrder.LastUpdated.wireValue, h.mal.sorts.last())
@@ -162,7 +164,7 @@ class AnimeListRepositoryTest {
         h.session.restore()
         h.awaitSettled()
         h.list.setWatchStatus(WatchStatus.Dropped)
-        h.awaitList { it.watchStatus == WatchStatus.Dropped && it.loaded && !it.loadingFirstPage }
+        h.awaitList { it.watchStatus == WatchStatus.Dropped && it.settled() }
 
         // The next request meets a 401, the refresh it drives is rejected, and the Session is over.
         h.session.forceExpireAccessToken()
@@ -177,9 +179,9 @@ class AnimeListRepositoryTest {
         // Signing in again — here, a Session put back in the store and restored — fetches afresh.
         h.store.writeSession(VALID_TOKENS, TEST_USER)
         h.session.restore()
-        val fresh = h.awaitSettled()
+        h.awaitSettled()
 
-        assertNull(fresh.watchStatus)
+        assertNull(h.list.state.value.watchStatus)
         assertNull(h.mal.statuses.last())
         h.close()
     }
@@ -234,7 +236,7 @@ class AnimeListRepositoryTest {
         assertEquals(1, h.mal.animeListRequests.size, "the user arriving did not ask for a second list")
 
         h.list.setWatchStatus(WatchStatus.Watching)
-        h.awaitList { it.watchStatus == WatchStatus.Watching && it.loaded && !it.loadingFirstPage }
+        h.awaitList { it.watchStatus == WatchStatus.Watching && it.settled() }
 
         // A real refresh: `refreshing` goes true and back to false on the same Session.
         h.session.forceExpireAccessToken()
@@ -259,7 +261,7 @@ class AnimeListRepositoryTest {
         assertEquals(1, h.mal.animeListRequests.size, "re-picking what is on screen asks for nothing")
 
         h.list.reload()
-        h.awaitList { it.revision == 2 && !it.loadingFirstPage }
+        h.awaitList { it.revision == 2 && it.settled() }
         assertEquals(2, h.mal.animeListRequests.size, "Reload is a request for exactly that")
         h.close()
     }
@@ -275,17 +277,17 @@ class AnimeListRepositoryTest {
             },
         )
         h.session.restore()
-        h.awaitList { it.firstPageError != null }
+        h.awaitFailed()
 
         h.list.setWatchStatus(null)
         // The launch has to have run before the wait, or the failure being waited for is the old one.
         runCurrent()
-        h.awaitList { it.firstPageError != null && !it.loadingFirstPage }
+        h.awaitFailed()
         assertEquals(2, h.mal.animeListRequests.size, "the failed filter re-picked is a retry")
 
         failing = false
         h.list.setSortOrder(AnimeListSortOrder.LastUpdated)
-        assertEquals(2, h.awaitSettled().entries.size)
+        assertEquals(2, h.awaitSettled().size)
         assertEquals(3, h.mal.animeListRequests.size, "and so is the failed Sort Order")
         h.close()
     }
@@ -307,4 +309,9 @@ class AnimeListRepositoryTest {
         assertEquals(AnimeListState(), h.list.state.value)
         h.close()
     }
+}
+
+/** Entries on screen, and nothing in flight behind or below them. */
+private fun AnimeListState.settled(): Boolean = content.let {
+    it is AnimeListContent.Entries && !it.replacing && it.tail != AnimeListTail.LoadingMore
 }
