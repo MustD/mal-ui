@@ -47,31 +47,28 @@ deliberately **not** an enum for the same reason — an unrecognised one stays d
 
 ## Status of the live check
 
-**[unverified] — this section is the one part of ticket 02 that needs a signed-in MAL account, which the implementing
-agent does not have.** Everything above is from MAL's v2 documentation plus the shapes the code now depends on; nothing
-here has been compared against a live response yet.
+**Checked by hand on 2026-09-24, in the running app, against a real account with more than 50 entries.** Nothing
+contradicted the table above.
 
-To fill it in, sign in on the desktop app, take the access token, and run:
+| # | Result |
+|---|---|
+| 1 | **Not checked.** The app cannot send two `status` values, so this cannot be observed from it; it needs `curl` 2 below. It only matters if multi-select filtering is ever proposed. |
+| 2 | **Confirmed**, from the running app: all four Sort Orders reorder the list. |
+| 2a | **Confirmed for `anime_start_date`:** newest first, matching the "Start date (newest first)" label. |
+| 3 | **Not checked, and not needed.** Paging past 50 entries works through to the end of the list, which confirms the app's offset-driven paging. Whether the link is absolute is not visible from the app, and the app does not depend on it. |
+| 4 | **Not checked.** |
+
+The claims still open can be answered with a token from a desktop sign-in:
 
 ```console
-# 1. The request the app actually sends. Confirms the response shape, `paging.next`, and `num_episodes: 0`.
+# The request the app actually sends. Answers claim 3 (`paging.next`) and claim 4 (`num_episodes: 0`).
 $ curl -s -H "Authorization: Bearer $MAL_ACCESS_TOKEN" \
     'https://api.myanimelist.net/v2/users/@me/animelist?limit=50&offset=0&nsfw=true&sort=list_updated_at&fields=id,title,main_picture,num_episodes,media_type,status,list_status%7Bstatus,score,num_episodes_watched,updated_at%7D' \
     | head -c 2000
 
-# 2. Claim 1: does a second `status` win, merge, or 400?
+# Claim 1: does a second `status` win, merge, or 400?
 $ curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $MAL_ACCESS_TOKEN" \
     'https://api.myanimelist.net/v2/users/@me/animelist?limit=1&status=watching&status=completed'
-
-# 3. Claim 2 / 2a: which `sort` values are accepted, which 400, and which way each one runs.
-#    For 2a, fetch one page per sort and read the first two entries: `anime_start_date` is the one
-#    worth checking, because it is the only label ticket 05 had to correct against the spec's copy.
-$ for s in list_updated_at list_score anime_title anime_start_date anime_id list_score_desc; do \
-    printf '%s ' "$s"; \
-    curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $MAL_ACCESS_TOKEN" \
-      "https://api.myanimelist.net/v2/users/@me/animelist?limit=1&sort=$s"; \
-  done
 ```
 
-Record the answers here, replacing this section, and note anything that contradicts the table above — a contradiction in
-claim 1 or 2 changes the spec's filter and Sort Order decisions, not just this file.
+A contradiction in claim 1 would change the spec's filter decision, not just this file.
