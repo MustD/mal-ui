@@ -68,6 +68,20 @@ class PopupRedirectChannelTest {
     }
 
     @Test
+    fun a_denial_from_the_popup_is_handed_on_as_received() = channelTest {
+        val channel = channelFor(currentOrigin(), popup = thisWindow())
+        assertEquals(ArmResult.Armed, channel.arm("${currentOrigin()}$CALLBACK_PATH"))
+        channel.open(AUTHORIZATION_URL)
+        val denial = "${currentOrigin()}$CALLBACK_PATH?error=access_denied&state=a-state"
+
+        postToSelf(denial)
+
+        // A capture transports and never interprets: the denial is the opener repository's to
+        // judge, so it ends the same way here as on desktop and Android.
+        assertEquals(AuthRedirectResult.Received(denial), channel.awaitOrNull())
+    }
+
+    @Test
     fun a_blocked_popup_falls_back_to_a_full_page_redirect() = channelTest {
         // `window.open` returning null is what a blocked popup — or a lost user activation — looks
         // like from here, and it is the only signal there is.

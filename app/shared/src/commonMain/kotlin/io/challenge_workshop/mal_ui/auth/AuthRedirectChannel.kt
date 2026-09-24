@@ -26,15 +26,21 @@ sealed interface ArmResult {
 /** How an armed [AuthRedirectChannel] ended. */
 sealed interface AuthRedirectResult {
     /**
-     * The redirect, exactly as the platform saw it. Not parsed here — it goes through the same
-     * `parseRedirect()` as a paste, so both paths produce the same errors.
+     * The redirect, exactly as the platform saw it — whatever MAL sent, `error=access_denied`
+     * included. Not judged here: it goes to `completeAuthorization` exactly as a paste does, so a
+     * denial reads, and ends, the same on every target and by either route.
      */
     data class Received(val rawRedirect: String) : AuthRedirectResult
 
     /** The user backed out. The Pending Authorization survives; see `MalSessionViewModel.cancelSignIn`. */
     data object Cancelled : AuthRedirectResult
 
-    /** The capture broke after the browser opened — a timeout, a listener that died. */
+    /**
+     * The capture itself broke after the browser opened — an Auth Tab whose verification failed or
+     * timed out, a result code nobody recognises. Never MAL's answer: that is [Received], denial or
+     * not. The Pending Authorization survives, so Paste-the-code can still finish. (Desktop's
+     * listener giving up after its timeout is [Unsupported], not this: nothing broke.)
+     */
     data class Failed(val message: String) : AuthRedirectResult
 
     /** The channel gave up on capturing anything. Fall back to Paste-the-code. */
@@ -55,6 +61,15 @@ sealed interface AuthRedirectResult {
  *   between the click and `window.open` loses it.
  * - **The channel comes from [rememberAuthRedirectChannel]**, a `@Composable`, so Android can hold an
  *   `ActivityResultLauncher` — which can only be registered from composition.
+ *
+ * **A capture transports and filters; it never interprets.** Whatever MAL sent comes back as
+ * [AuthRedirectResult.Received] — a denial too — and is judged by `completeAuthorization` exactly as
+ * a paste is. A capture may *read* the redirect, as desktop does to choose the page its browser tab
+ * shows, but never answers with a verdict of its own. Filtering is the capture's: its own `state`
+ * check decides which redirect belongs to *this* attempt — Android's intent filter is exported, so
+ * any app can fire it — which is not the security check `completeAuthorization` makes. Refusing a
+ * request MAL cannot have sent, one carrying neither `code` nor `error`, is filtering too: the
+ * capture keeps waiting rather than answering.
  *
  * The consequence, worth naming: the ViewModel cannot own the channel. The composable owns it and hands
  * it in. That is a real wart and the price of one API across three platforms.

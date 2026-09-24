@@ -105,6 +105,18 @@ class AuthTabRedirectChannelTest {
         assertEquals(0L, currentTime)
     }
 
+    @Test
+    fun a_denial_carried_by_an_ok_result_is_handed_on_as_received() = runTest {
+        val capture = capturing("our-state")
+
+        // The Auth Tab reports `RESULT_OK` for any redirect to our URI — MAL saying no included.
+        results.deliver(ok(androidDenial("our-state")))
+
+        // Not `Failed`: that would be this channel judging MAL's answer, which is
+        // `completeAuthorization`'s, so a denial ends the same way here as on every other target.
+        assertEquals(AuthRedirectResult.Received(androidDenial("our-state")), capture.await())
+    }
+
     /**
      * The ticket's first rule, and the case that most of the installed base is in: a browser without
      * Auth Tab support degrades to a Custom Tab, reports `RESULT_CANCELED` on success, and the

@@ -36,7 +36,6 @@ import kotlin.test.fail
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
-import java.time.Duration as JavaDuration
 
 /**
  * The desktop Redirect Capture, over a real socket.
@@ -54,12 +53,6 @@ import java.time.Duration as JavaDuration
 class LoopbackRedirectListenerTest {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    /** Follows nothing: the success path *is* a 302, so following it would hide the assertion. */
-    private val http: HttpClient = HttpClient.newBuilder()
-        .followRedirects(HttpClient.Redirect.NEVER)
-        .connectTimeout(JavaDuration.ofSeconds(5))
-        .build()
 
     @AfterTest
     fun tearDown() {
@@ -79,7 +72,7 @@ class LoopbackRedirectListenerTest {
         assertEquals(ArmResult.Armed, listener.arm(DESKTOP_REDIRECT_URI))
         listener.open(authorizationUrl(state = "a-state"))
 
-        val response = get("$DESKTOP_REDIRECT_URI?code=an-auth-code&state=a-state")
+        val response = loopbackGet("$DESKTOP_REDIRECT_URI?code=an-auth-code&state=a-state")
 
         assertEquals(302, response.statusCode(), response.body())
         assertEquals(
@@ -100,9 +93,9 @@ class LoopbackRedirectListenerTest {
         val listener = listener()
         listener.arm(DESKTOP_REDIRECT_URI)
         listener.open(authorizationUrl(state = "a-state"))
-        get("$DESKTOP_REDIRECT_URI?code=an-auth-code&state=a-state")
+        loopbackGet("$DESKTOP_REDIRECT_URI?code=an-auth-code&state=a-state")
 
-        val done = get("http://127.0.0.1:$DESKTOP_LOOPBACK_PORT/oauth/callback/done")
+        val done = loopbackGet("http://127.0.0.1:$DESKTOP_LOOPBACK_PORT/oauth/callback/done")
 
         assertEquals(200, done.statusCode())
         // `HttpServer` sends no content type of its own, so an omitted one renders as plain text.
@@ -165,7 +158,7 @@ class LoopbackRedirectListenerTest {
         }
 
         // ...and it really is bound, so the check above was not passing vacuously.
-        assertEquals(400, get("$DESKTOP_REDIRECT_URI?nothing=here").statusCode())
+        assertEquals(400, loopbackGet("$DESKTOP_REDIRECT_URI?nothing=here").statusCode())
         listener.release()
     }
 
@@ -195,10 +188,10 @@ class LoopbackRedirectListenerTest {
         listener.open(authorizationUrl(state = "a-state"))
 
         // Any local process can hit this port. Treating that as fatal would let one abort the login.
-        val forged = get("$DESKTOP_REDIRECT_URI?code=a-forged-code&state=not-a-state")
+        val forged = loopbackGet("$DESKTOP_REDIRECT_URI?code=a-forged-code&state=not-a-state")
         assertEquals(400, forged.statusCode())
 
-        val real = get("$DESKTOP_REDIRECT_URI?code=an-auth-code&state=a-state")
+        val real = loopbackGet("$DESKTOP_REDIRECT_URI?code=an-auth-code&state=a-state")
         assertEquals(302, real.statusCode(), "The listener stopped after the forged request.")
         assertEquals(
             AuthRedirectResult.Received("$DESKTOP_REDIRECT_URI?code=an-auth-code&state=a-state"),
@@ -216,7 +209,7 @@ class LoopbackRedirectListenerTest {
         val listener = listener()
         listener.arm(DESKTOP_REDIRECT_URI)
 
-        assertEquals(400, get("$DESKTOP_REDIRECT_URI?code=an-auth-code&state=a-state").statusCode())
+        assertEquals(400, loopbackGet("$DESKTOP_REDIRECT_URI?code=an-auth-code&state=a-state").statusCode())
 
         listener.release()
     }
@@ -232,7 +225,7 @@ class LoopbackRedirectListenerTest {
         val threads = (1..2).map { index ->
             Thread {
                 together.await()
-                statuses += get("$DESKTOP_REDIRECT_URI?code=code-$index&state=a-state").statusCode()
+                statuses += loopbackGet("$DESKTOP_REDIRECT_URI?code=code-$index&state=a-state").statusCode()
             }.apply { start() }
         }
         together.countDown()
@@ -249,23 +242,23 @@ class LoopbackRedirectListenerTest {
     }
 
     @Test
-    fun a_denied_authorization_is_a_successful_redirect_and_a_failed_sign_in() = runBlocking {
+    fun a_denied_authorization_is_captured_verbatim_and_told_to_the_browser_tab() = runBlocking {
         val listener = listener()
         listener.arm(DESKTOP_REDIRECT_URI)
         listener.open(authorizationUrl(state = "a-state"))
 
-        val response = get("$DESKTOP_REDIRECT_URI?error=access_denied&state=a-state")
+        val response = loopbackGet("$DESKTOP_REDIRECT_URI?error=access_denied&state=a-state")
 
         // The *redirect* worked; the authorization did not. A 4xx here would blame the browser.
         assertEquals(200, response.statusCode())
+        assertTrue("Sign-in was not approved" in response.body(), response.body())
         assertTrue("access_denied" in response.body(), response.body())
 
-        val captured = listener.await()
-        val failed = captured as? AuthRedirectResult.Failed ?: fail("A denial reported as $captured")
-        assertTrue(
-            "access_denied" in failed.message,
-            "The message has to be `parseRedirect()`'s, so a denial reads identically however the " +
-                "redirect arrived: ${failed.message}",
+        // `Received`, not `Failed`: a capture transports and never interprets, so the denial is
+        // judged by `completeAuthorization` exactly as the same redirect pasted by hand would be.
+        assertEquals(
+            AuthRedirectResult.Received("$DESKTOP_REDIRECT_URI?error=access_denied&state=a-state"),
+            listener.await(),
         )
     }
 
@@ -274,7 +267,7 @@ class LoopbackRedirectListenerTest {
         val listener = listener()
         listener.arm(DESKTOP_REDIRECT_URI)
 
-        val posted = http.send(
+        val posted = loopbackHttp.send(
             HttpRequest.newBuilder(URI("$DESKTOP_REDIRECT_URI?code=an-auth-code"))
                 .POST(HttpRequest.BodyPublishers.noBody())
                 .build(),
@@ -291,7 +284,7 @@ class LoopbackRedirectListenerTest {
         val listener = listener()
         listener.arm(DESKTOP_REDIRECT_URI)
 
-        assertEquals(404, get("http://127.0.0.1:$DESKTOP_LOOPBACK_PORT/favicon.ico").statusCode())
+        assertEquals(404, loopbackGet("http://127.0.0.1:$DESKTOP_LOOPBACK_PORT/favicon.ico").statusCode())
 
         listener.release()
     }
@@ -349,7 +342,7 @@ class LoopbackRedirectListenerTest {
 
         listener.arm(DESKTOP_REDIRECT_URI)
         listener.open(authorizationUrl(state = "first-state"))
-        get("$DESKTOP_REDIRECT_URI?code=first-code&state=first-state")
+        loopbackGet("$DESKTOP_REDIRECT_URI?code=first-code&state=first-state")
         assertTrue(listener.await() is AuthRedirectResult.Received)
 
         assertEquals(
@@ -359,8 +352,8 @@ class LoopbackRedirectListenerTest {
         )
         listener.open(authorizationUrl(state = "second-state"))
         // The first sign-in's `state` must no longer be accepted, and its result must not be reused.
-        assertEquals(400, get("$DESKTOP_REDIRECT_URI?code=first-code&state=first-state").statusCode())
-        assertEquals(302, get("$DESKTOP_REDIRECT_URI?code=second-code&state=second-state").statusCode())
+        assertEquals(400, loopbackGet("$DESKTOP_REDIRECT_URI?code=first-code&state=first-state").statusCode())
+        assertEquals(302, loopbackGet("$DESKTOP_REDIRECT_URI?code=second-code&state=second-state").statusCode())
 
         assertEquals(
             AuthRedirectResult.Received("$DESKTOP_REDIRECT_URI?code=second-code&state=second-state"),
@@ -401,7 +394,7 @@ class LoopbackRedirectListenerTest {
         assertTrue(launched.await(5, TimeUnit.SECONDS), "The browser was never launched.")
         // A launch that hangs must not stop the redirect being captured: `xdg-open`'s exit code is
         // never checked, so a silent failure is indistinguishable from a success.
-        assertEquals(302, get("$DESKTOP_REDIRECT_URI?code=an-auth-code&state=a-state").statusCode())
+        assertEquals(302, loopbackGet("$DESKTOP_REDIRECT_URI?code=an-auth-code&state=a-state").statusCode())
         assertTrue(listener.await() is AuthRedirectResult.Received)
     }
 
@@ -412,7 +405,7 @@ class LoopbackRedirectListenerTest {
 
         listener.open(authorizationUrl(state = "a-state"))
 
-        assertEquals(302, get("$DESKTOP_REDIRECT_URI?code=an-auth-code&state=a-state").statusCode())
+        assertEquals(302, loopbackGet("$DESKTOP_REDIRECT_URI?code=an-auth-code&state=a-state").statusCode())
         assertTrue(listener.await() is AuthRedirectResult.Received)
     }
 
@@ -457,12 +450,6 @@ class LoopbackRedirectListenerTest {
         "https://myanimelist.net/v1/oauth2/authorize?response_type=code&client_id=an-id" +
             "&code_challenge=a-verifier&code_challenge_method=plain&state=$state" +
             "&redirect_uri=$DESKTOP_REDIRECT_URI"
-
-    private fun get(url: String): HttpResponse<String> =
-        http.send(
-            HttpRequest.newBuilder(URI(url)).GET().build(),
-            HttpResponse.BodyHandlers.ofString(),
-        )
 
     private fun awaitPortBound() {
         repeat(250) {

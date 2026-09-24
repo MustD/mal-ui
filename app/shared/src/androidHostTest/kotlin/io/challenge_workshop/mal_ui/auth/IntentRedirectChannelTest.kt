@@ -86,6 +86,17 @@ class IntentRedirectChannelTest {
     }
 
     @Test
+    fun a_denial_is_handed_on_as_received_rather_than_judged_here() = runTest {
+        val capture = capturing("our-state")
+
+        inbox.deliver(denialIntent("our-state"))
+
+        // A capture transports and never interprets: `completeAuthorization` judges a denial
+        // exactly as it would the same redirect pasted by hand, on every target.
+        assertEquals(AuthRedirectResult.Received(androidDenial("our-state")), capture.await())
+    }
+
+    @Test
     fun a_redirect_from_another_sign_in_is_refused_and_the_capture_keeps_waiting() = runTest {
         val capture = capturing("our-state")
 

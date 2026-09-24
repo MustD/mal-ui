@@ -277,6 +277,9 @@ class LoopbackRedirectListener(
                 }
 
                 val raw = "$redirectUri?$query"
+                // Read only to choose the page this tab renders and to refuse what MAL cannot have
+                // sent. Judging the redirect is `completeAuthorization`'s, so a denial goes back as
+                // `Received` like any other: see `AuthRedirectChannel`.
                 val denial = try {
                     parseRedirect(raw)
                     null
@@ -298,11 +301,6 @@ class LoopbackRedirectListener(
                     // The *redirect* succeeded; the authorization did not. A 4xx would blame the
                     // browser for something it got right.
                     respond(exchange, 200, page("Sign-in was not approved", denial.message.orEmpty()))
-                    captured.complete(
-                        AuthRedirectResult.Failed(
-                            denial.message ?: "MyAnimeList denied the authorization request.",
-                        ),
-                    )
                 } else {
                     // Straight on to a bare URL, so the authorization code does not linger in
                     // browser history — worth it under `plain` PKCE, where the code verifier travels
@@ -312,8 +310,8 @@ class LoopbackRedirectListener(
                     exchange.sendResponseHeaders(302, -1)
                     exchange.close()
                     redirected.set(true)
-                    captured.complete(AuthRedirectResult.Received(raw))
                 }
+                captured.complete(AuthRedirectResult.Received(raw))
             } catch (e: Exception) {
                 runCatching { respond(exchange, 500, page("Something went wrong", "")) }
             } finally {
