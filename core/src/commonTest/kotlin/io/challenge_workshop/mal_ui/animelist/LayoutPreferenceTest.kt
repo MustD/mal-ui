@@ -5,7 +5,6 @@ package io.challenge_workshop.mal_ui.animelist
 import io.challenge_workshop.mal_ui.session.JsonTokenStore
 import io.challenge_workshop.mal_ui.session.KeyValueStore
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -13,7 +12,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * The Layout preference: the one piece of Anime List state that is not [AnimeListPager]'s.
+ * The Layout preference: the one piece of Anime List state that is not [AnimeListRepository]'s.
  *
  * What is worth pinning here is an *ordering* — a tap against a store read still in flight — and a
  * Compose test cannot hold the two apart: `runComposeUiTest` brings its own scheduler, so a coroutine
@@ -83,11 +82,9 @@ class LayoutPreferenceTest {
         val preference = LayoutPreference(JsonTokenStore(kv), this)
         runCurrent()
 
-        // A tap is a `viewModelScope.launch` on `Dispatchers.Main.immediate`, which runs the body up
-        // to its first suspension point without dispatching. `runCurrent` is what stands in for that
-        // here: the value has to be on screen before the write it is waiting on.
-        launch { preference.choose(AnimeListLayout.Cards) }
-        runCurrent()
+        // The value has to be on screen before the write it is waiting on — inside the call, with
+        // nothing run in between.
+        preference.choose(AnimeListLayout.Cards)
         assertEquals(AnimeListLayout.Cards, preference.value.value, "the tap must be immediate")
 
         kv.releaseReads()
@@ -124,7 +121,7 @@ class LayoutPreferenceTest {
 
         // Cards is what the screen shows — the default, the read has not landed — and Cards is what
         // the user picks.
-        launch { preference.choose(AnimeListLayout.Cards) }
+        preference.choose(AnimeListLayout.Cards)
         kv.releaseReads()
         kv.releaseWrites()
         advanceUntilIdle()

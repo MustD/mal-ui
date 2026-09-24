@@ -65,7 +65,7 @@ class AnimeListPagerTest {
     fun the_first_page_asks_for_the_agreed_query() = runTest {
         val (pager, mal) = pagerOver(page(FakeEntry(1, "Cowboy Bebop")))
 
-        pager.loadFirstPage()
+        pager.start()
 
         val url = mal.animeListRequests.single()
         assertEquals("50", url.parameters["limit"])
@@ -89,7 +89,7 @@ class AnimeListPagerTest {
         for ((status, wire) in expected) {
             val (pager, mal) = pagerOver(page(), watchStatus = status)
 
-            pager.loadFirstPage()
+            pager.start()
 
             assertEquals(wire, mal.animeListRequests.single().parameters["status"], "for $status")
         }
@@ -100,7 +100,7 @@ class AnimeListPagerTest {
         for (sortOrder in AnimeListSortOrder.entries) {
             val (pager, mal) = pagerOver(page(), sortOrder = sortOrder)
 
-            pager.loadFirstPage()
+            pager.start()
 
             assertEquals(sortOrder.wireValue, mal.animeListRequests.single().parameters["sort"])
         }
@@ -123,7 +123,7 @@ class AnimeListPagerTest {
             ),
         )
 
-        pager.loadFirstPage()
+        pager.start()
 
         val entry = pager.state.value.entries.single()
         assertEquals(1L, entry.animeId)
@@ -156,7 +156,7 @@ class AnimeListPagerTest {
             ),
         )
 
-        pager.loadFirstPage()
+        pager.start()
 
         val entry = pager.state.value.entries.single()
         assertEquals(WatchStatus.Unknown, entry.watchStatus)
@@ -169,7 +169,7 @@ class AnimeListPagerTest {
     fun a_response_without_paging_next_exhausts_the_pager_and_stops_it_asking() = runTest {
         val (pager, mal) = pagerOver(page(FakeEntry(1, "Cowboy Bebop"), hasMore = false))
 
-        pager.loadFirstPage()
+        pager.start()
         assertTrue(pager.state.value.exhausted)
 
         pager.next()
@@ -186,7 +186,7 @@ class AnimeListPagerTest {
             },
         )
 
-        pager.loadFirstPage()
+        pager.start()
         pager.next()
 
         assertContentEquals(
@@ -214,7 +214,7 @@ class AnimeListPagerTest {
             animeList = { offset -> AnimeListResponse.Page(fakeEntries(2, firstId = offset + 1L), hasMore = true) },
             holdAnimeList = { offset -> if (offset > 0) secondPageLanded.await() },
         )
-        pager.loadFirstPage()
+        pager.start()
 
         val inFlight = backgroundScope.launch { pager.next() }
         pager.state.first { it.loadingMore }
@@ -245,7 +245,7 @@ class AnimeListPagerTest {
                 else AnimeListResponse.Page(fakeEntries(2), hasMore = true)
             },
         )
-        pager.loadFirstPage()
+        pager.start()
         pager.next()
         assertNotNull(pager.state.value.moreError)
 
@@ -290,7 +290,7 @@ class AnimeListPagerTest {
         )
         pager = built
 
-        pager.loadFirstPage()
+        pager.start()
 
         assertEquals(listOf("0", "2", "4"), mal.animeListRequests.map { it.parameters["offset"] })
         assertContentEquals(listOf(1L, 2L), pager.state.value.entries.map { it.animeId })
@@ -317,7 +317,7 @@ class AnimeListPagerTest {
             },
         )
 
-        pager.loadFirstPage()
+        pager.start()
 
         assertEquals(AnimeListPager.MAX_EMPTY_PAGE_SCAN, mal.animeListRequests.size)
         val gaveUp = pager.state.value
@@ -369,7 +369,7 @@ class AnimeListPagerTest {
             },
         )
         pager = built
-        pager.loadFirstPage()
+        pager.start()
 
         filtering = true
         pager.reset(watchStatus = WatchStatus.OnHold)
@@ -392,7 +392,7 @@ class AnimeListPagerTest {
             },
         )
 
-        pager.loadFirstPage()
+        pager.start()
         pager.next()
 
         assertEquals(listOf("0", "2", "4"), mal.animeListRequests.map { it.parameters["offset"] })
@@ -404,7 +404,7 @@ class AnimeListPagerTest {
     fun a_failed_first_page_surfaces_as_the_first_page_error_with_nothing_loaded() = runTest {
         val (pager, _) = pagerOver({ AnimeListResponse.Failure(HttpStatusCode.ServiceUnavailable) })
 
-        pager.loadFirstPage()
+        pager.start()
 
         val state = pager.state.value
         assertTrue(state.entries.isEmpty())
@@ -421,7 +421,7 @@ class AnimeListPagerTest {
             if (fail) AnimeListResponse.Failure() else AnimeListResponse.Page(fakeEntries(1), hasMore = false)
         })
 
-        pager.loadFirstPage()
+        pager.start()
         fail = false
         pager.retry()
 
@@ -441,7 +441,7 @@ class AnimeListPagerTest {
             },
         )
 
-        pager.loadFirstPage()
+        pager.start()
         pager.next()
 
         val failed = pager.state.value
@@ -477,7 +477,7 @@ class AnimeListPagerTest {
         )
         pager = built
 
-        pager.loadFirstPage()
+        pager.start()
         resetting = true
         pager.reset(watchStatus = WatchStatus.Completed)
 
@@ -537,7 +537,7 @@ class AnimeListPagerTest {
                 AnimeListResponse.Page(fakeEntries(2, firstId = firstId), hasMore = true)
             },
         )
-        pager.loadFirstPage()
+        pager.start()
         pager.next()
 
         filtered = true
@@ -583,7 +583,7 @@ class AnimeListPagerTest {
             },
             holdAnimeList = { offset -> if (offset > 0) releaseStalePage.await() },
         )
-        pager.loadFirstPage()
+        pager.start()
 
         val stale = backgroundScope.launch { pager.next() }
         pager.state.first { it.loadingMore }
@@ -627,7 +627,7 @@ class AnimeListPagerTest {
                 if (failing) AnimeListResponse.Failure() else AnimeListResponse.Page(fakeEntries(2), hasMore = true)
             },
         )
-        pager.loadFirstPage()
+        pager.start()
         assertEquals(2, pager.state.value.entries.size)
 
         failing = true
@@ -660,7 +660,7 @@ class AnimeListPagerTest {
                 AnimeListResponse.Page(fakeEntries(2, firstId = firstId), hasMore = true)
             },
         )
-        pager.loadFirstPage()
+        pager.start()
         pager.next()
 
         sorted = true
@@ -694,7 +694,7 @@ class AnimeListPagerTest {
     fun a_sort_order_change_keeps_the_watch_status_filter() = runTest {
         val (pager, mal) = pagerOver(page(), watchStatus = WatchStatus.Watching)
 
-        pager.loadFirstPage()
+        pager.start()
         pager.reset(sortOrder = AnimeListSortOrder.Score)
 
         assertEquals(WatchStatus.Watching, pager.state.value.watchStatus)

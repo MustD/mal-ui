@@ -11,7 +11,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.v2.runComposeUiTest
-import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
+import io.challenge_workshop.mal_ui.animelist.AnimeListRepository
 import io.challenge_workshop.mal_ui.animelist.LayoutPreference
 import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListener
 import io.challenge_workshop.mal_ui.auth.LoopbackRedirectListenerTest
@@ -35,6 +35,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -77,15 +79,16 @@ class SignInScreenTest {
         val repository = MalSessionRepository(
             store,
             initialConfig = MalAuthConfig(clientId = "a-client-id"),
-            // Not the default factory: the signed-in screen loads the Anime List as soon as it is
-            // composed, and a unit test must not make that a real request to myanimelist.net.
+            // Not the default factory: the Anime List loads itself as soon as a Session starts, and
+            // a unit test must not make that a real request to myanimelist.net.
             clientFactory = fakeMal(),
         )
         val viewModel = MalSessionViewModel(repository, StartupRedirect.None)
-        val animeList = AnimeListViewModel(
-            repository,
-            LayoutPreference(store, CoroutineScope(Dispatchers.Unconfined)),
-        )
+        // Its own scope, cancelled below: nothing else would ever end the collector that watches the
+        // Session, or a page request still in flight when the repository underneath is closed.
+        val listScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val animeList = AnimeListRepository(repository, listScope)
+        val layout = LayoutPreference(store, listScope)
         val opened = Collections.synchronizedList(mutableListOf<String>())
         try {
             runComposeUiTest {
@@ -93,7 +96,7 @@ class SignInScreenTest {
                     // Otherwise the desktop `UriHandler` really does launch a browser from a unit
                     // test.
                     CompositionLocalProvider(LocalUriHandler provides RecordingUriHandler(opened)) {
-                        AppScreen(viewModel, animeList)
+                        AppScreen(viewModel, animeList, layout)
                     }
                 }
 
@@ -124,7 +127,7 @@ class SignInScreenTest {
                 }
             }
         } finally {
-            clear(animeList)
+            listScope.cancel()
             repository.close()
             Dispatchers.resetMain()
             assertTrue(

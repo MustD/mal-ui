@@ -85,22 +85,6 @@ class SignedInScreenTest {
     }
 
     /**
-     * The first page is asked for by the screen once it exists, and not by the ViewModel's `init`.
-     *
-     * The pager must only ask MAL for a list once there is a signed-in screen to show one on, and
-     * this effect is the only thing that says so.
-     */
-    @Test
-    fun the_signed_in_screen_asks_for_the_first_page_when_it_appears() {
-        val actions = RecordedActions()
-        runComposeUiTest {
-            setContent { SessionRoute(signedIn(list = AnimeListState()), actions.actions) }
-
-            assertEquals(listOf("loadFirstPage"), actions.calls)
-        }
-    }
-
-    /**
      * Toggling to the dense Layout re-draws the List Entries that are already loaded.
      *
      * Driven by the control rather than by a parameter, because the toggle is the only thing a user
@@ -160,7 +144,7 @@ class SignedInScreenTest {
             onNodeWithText("List").performClick()
             onNodeWithText("Cards").performClick()
 
-            assertEquals(listOf("selectLayout", "selectLayout"), actions.clicks())
+            assertEquals(listOf("selectLayout", "selectLayout"), actions.calls)
             assertEquals(listOf(AnimeListLayout.List, AnimeListLayout.Cards), actions.layouts)
         }
     }
@@ -261,7 +245,7 @@ class SignedInScreenTest {
 
             onNodeWithText("Show all").performClick()
 
-            assertEquals(listOf("selectWatchStatus"), actions.clicks())
+            assertEquals(listOf("selectWatchStatus"), actions.calls)
             assertEquals(listOf<WatchStatus?>(null), actions.watchStatuses)
         }
     }
@@ -293,7 +277,7 @@ class SignedInScreenTest {
                 // bottom, so scrolling to it enters the prefetch zone and the trigger fires. That it
                 // costs nothing is the pager's guard, on four Targets — `next()` refuses while a
                 // page is showing its error.
-                assertEquals(listOf("retry"), actions.clicks().filterNot { it == "loadMore" }, label)
+                assertEquals(listOf("retry"), actions.calls.filterNot { it == "loadMore" }, label)
             }
         }
     }
@@ -343,7 +327,7 @@ class SignedInScreenTest {
                 onNodeWithTag(ANIME_LIST_TAG).performScrollToIndex(many.size)
                 waitForIdle()
 
-                assertEquals(expected, actions.clicks().distinct(), "exhausted=$exhausted")
+                assertEquals(expected, actions.calls.distinct(), "exhausted=$exhausted")
             }
         }
     }

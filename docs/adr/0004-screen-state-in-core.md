@@ -45,6 +45,10 @@ alternative puts the mapping back in a composable. Two of the six are deliberate
 
 - `animeList` is `AnimeListPager.state` and not the pager, because the pager stays ViewModel-scoped. **Loaded pages
   must not outlive a sign-out**, so needing to hand the source an object is not a reason to promote one to a `single`.
+  *Superseded in part (2026-09-24):* the ViewModel was never discarded on sign-out — it shared a store with the
+  Session's — so the rule did not hold. It is now `AnimeListRepository.state`, a process-scoped `single` that builds one
+  pager per Session and discards it when the Session ends; the lifetime is that module's interface rather than a
+  consequence of scoping.
 - `layout` is `LayoutPreference.value`, and the preference *is* process-scoped, because a Layout change issues no
   request and the pager has never heard of it.
 

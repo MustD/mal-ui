@@ -10,7 +10,8 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.setSingletonImageLoaderFactory
-import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
+import io.challenge_workshop.mal_ui.animelist.AnimeListRepository
+import io.challenge_workshop.mal_ui.animelist.LayoutPreference
 import io.challenge_workshop.mal_ui.animelist.malImageLoader
 import io.challenge_workshop.mal_ui.auth.AuthorizingScreen
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
@@ -23,6 +24,7 @@ import io.challenge_workshop.mal_ui.auth.rememberAuthRedirectChannel
 import io.challenge_workshop.mal_ui.auth.screenActions
 import io.challenge_workshop.mal_ui.screen.ScreenState
 import io.challenge_workshop.mal_ui.screen.ScreenStateSource
+import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
 
 /**
@@ -37,7 +39,8 @@ import org.koin.compose.viewmodel.koinViewModel
 @Composable
 fun App(
     viewModel: MalSessionViewModel = koinViewModel(),
-    animeList: AnimeListViewModel = koinViewModel(),
+    animeList: AnimeListRepository = koinInject(),
+    layout: LayoutPreference = koinInject(),
 ) {
     // Coil's singleton, replaced here at the root because its default cannot fetch over the network
     // on the web Targets — see [malImageLoader]. `setSingletonImageLoaderFactory` remembers the
@@ -49,19 +52,20 @@ fun App(
 
     MaterialTheme {
         Surface(modifier = Modifier) {
-            AppScreen(viewModel, animeList)
+            AppScreen(viewModel, animeList, layout)
         }
     }
 }
 
 /**
- * The adapter between the two ViewModels and the one value the screens take.
+ * The adapter between the Session's ViewModel, the Anime List, the Layout and the one value the
+ * screens take.
  *
  * Split from [App] so it can be rendered without replacing Coil's singleton or re-theming, and split
- * from [SessionRoute] because *this* is the half that needs ViewModels at all: the routing below is a
+ * from [SessionRoute] because *this* is the half that needs a ViewModel at all: the routing below is a
  * `when` over a value and a record of lambdas, and nothing in it knows what a ViewModel is.
  *
- * **Everything here is `remember`ed on the two ViewModels.** A [ScreenStateSource] rebuilt per
+ * **Everything here is `remember`ed on what it was built from.** A [ScreenStateSource] rebuilt per
  * recomposition would restart its combine on every frame, and an actions record rebuilt per
  * recomposition would be a fresh object with fresh method references — an unstable argument, which
  * would stop Compose skipping and recompose the signed-in screen, grid included, on every emission.
@@ -77,26 +81,27 @@ fun App(
 @Composable
 internal fun AppScreen(
     viewModel: MalSessionViewModel,
-    animeList: AnimeListViewModel,
+    animeList: AnimeListRepository,
+    layout: LayoutPreference,
 ) {
     val channel = rememberAuthRedirectChannel()
     val uriHandler = LocalUriHandler.current
     val scope = rememberCoroutineScope()
 
-    val source = remember(viewModel, animeList, scope) {
+    val source = remember(viewModel, animeList, layout, scope) {
         ScreenStateSource(
             session = viewModel.state,
             config = viewModel.config,
             animeList = animeList.state,
-            layout = animeList.layout,
+            layout = layout.value,
             form = viewModel.form,
             diagnostics = viewModel.diagnostics,
             scope = scope,
         )
     }
 
-    val actions = remember(viewModel, animeList, channel, uriHandler) {
-        screenActions(viewModel, animeList, channel, uriHandler::openUri)
+    val actions = remember(viewModel, animeList, layout, channel, uriHandler) {
+        screenActions(viewModel, animeList, layout, channel, uriHandler::openUri)
     }
 
     SessionRoute(source.state.collectAsStateWithLifecycle().value, actions)

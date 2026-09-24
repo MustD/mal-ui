@@ -27,10 +27,11 @@ import kotlinx.coroutines.flow.stateIn
  * mapping back in a composable. See `docs/adr/0004-screen-state-in-core.md`.
  *
  * Two of those inputs are deliberately *not* the objects that own them:
- *  - `animeList` is `AnimeListPager.state` rather than the pager, because the pager stays
- *    ViewModel-scoped: loaded pages must not outlive a sign-out.
- *  - `layout` is `LayoutPreference.value` for the same reason in reverse — the preference is
- *    process-scoped, and a Layout change issues no request, so the pager has never heard of it.
+ *  - `animeList` is `AnimeListRepository.state` rather than the repository, which also holds the
+ *    operations — and those are the actions records' business, not a value's. Loaded pages not
+ *    outliving a Session is the repository's rule, not this source's.
+ *  - `layout` is `LayoutPreference.value`, and a Layout change issues no request, so the list has
+ *    never heard of it.
  *
  * The six flows are the whole constructor. Where this build sends MAL traffic is *not* a seventh
  * parameter: [platformMalEndpoints] is an `expect fun` and therefore already this Target's answer, and

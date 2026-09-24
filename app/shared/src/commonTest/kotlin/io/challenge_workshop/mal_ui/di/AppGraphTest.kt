@@ -2,6 +2,7 @@
 
 package io.challenge_workshop.mal_ui.di
 
+import io.challenge_workshop.mal_ui.animelist.AnimeListRepository
 import io.challenge_workshop.mal_ui.animelist.LayoutPreference
 import io.challenge_workshop.mal_ui.mal.HttpClientFactory
 import io.challenge_workshop.mal_ui.mal.MAL_CLIENT_ID
@@ -52,8 +53,8 @@ class AppGraphTest {
 
     @BeforeTest
     fun setUp() {
-        // `LayoutPreference`'s scope is `Dispatchers.Main.immediate` — the dispatcher every
-        // `viewModelScope` uses — and no target's test platform provides one on its own.
+        // `LayoutPreference`'s and `AnimeListRepository`'s scope is `Dispatchers.Main.immediate`, and
+        // no target's test platform provides one on its own.
         Dispatchers.setMain(UnconfinedTestDispatcher())
     }
 
@@ -73,6 +74,7 @@ class AppGraphTest {
         assertNotNull(koin.get<JsonTokenStore>())
         assertNotNull(koin.get<MalSessionRepository>())
         assertNotNull(koin.get<LayoutPreference>())
+        assertNotNull(koin.get<AnimeListRepository>())
 
         koin.get<MalSessionRepository>().close()
     }
@@ -117,6 +119,19 @@ class AppGraphTest {
         val koin = koin()
 
         assertSame(koin.get<LayoutPreference>(), koin.get<LayoutPreference>())
+
+        koin.get<MalSessionRepository>().close()
+    }
+
+    /**
+     * One Anime List for the whole process: the one the Screen State reads has to be the one the
+     * actions drive, and the one that sees the Session end.
+     */
+    @Test
+    fun the_anime_list_repository_is_a_singleton() {
+        val koin = koin()
+
+        assertSame(koin.get<AnimeListRepository>(), koin.get<AnimeListRepository>())
 
         koin.get<MalSessionRepository>().close()
     }

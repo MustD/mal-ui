@@ -1,6 +1,6 @@
 package io.challenge_workshop.mal_ui.di
 
-import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
+import io.challenge_workshop.mal_ui.animelist.AnimeListRepository
 import io.challenge_workshop.mal_ui.animelist.LayoutPreference
 import io.challenge_workshop.mal_ui.auth.MalSessionViewModel
 import io.challenge_workshop.mal_ui.auth.StartupRedirect
@@ -55,10 +55,10 @@ val appModule: Module = module {
 
     // A `single`, matching the lifetime of the store it reads: the Layout is a device preference,
     // not a screen's state, and it is one of the Screen State's six inputs — so it has to outlive
-    // every composition that reads it, and be the same instance for the source and the ViewModel.
+    // every composition that reads it, and be the same instance for the source and the actions.
     //
-    // `Dispatchers.Main.immediate` is the same dispatcher every `viewModelScope` uses, which is what
-    // confines the preference's `chosen` guard to one thread. A scope of its own rather than a
+    // `Dispatchers.Main.immediate` confines the preference's `chosen` guard to one thread, and runs a
+    // Layout switch inside the click that asked for it. A scope of its own rather than a
     // `viewModelScope`, because a startup read cancelled by a screen going away would leave the
     // shipped default on screen for the rest of the launch.
     single {
@@ -73,17 +73,19 @@ val appModule: Module = module {
     // touches lives in the repository singleton above, so being recreated costs nothing.
     viewModel { MalSessionViewModel(repository = get(), startupRedirect = get()) }
 
-    // Also a `viewModel`, and it takes the repository rather than a client of its own: the pager it
-    // builds must ride the one authenticated `HttpClient` that owns refresh. The Layout comes in as
-    // the preference above rather than as the store, so this ViewModel cannot reach the Session
-    // records that live beside it.
+    // A `single`, like the Session it watches: it builds one list per Session and discards it when the
+    // Session ends, so that lifetime is its own interface rather than a consequence of scoping here.
+    // It takes the Session's repository rather than a client of its own, because every page must
+    // ride the one authenticated `HttpClient` that owns refresh.
     //
-    // **Do not change this to `single {`.** The `AnimeListPager` this builds is the thing that would
-    // then become process-scoped, and loaded pages must not outlive a sign-out — the next account to
-    // sign in on this device would open on the previous one's list. `ScreenStateSource` takes
-    // `pager.state` rather than the pager for exactly that reason: needing to hand the source an
-    // object is not a reason to promote one.
-    viewModel { AnimeListViewModel(repository = get(), layoutPreference = get()) }
+    // `Dispatchers.Main.immediate`, as for the Layout above: it confines the pager to one thread and
+    // starts an operation inside the click that asked for it.
+    single {
+        AnimeListRepository(
+            session = get(),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+        )
+    }
 }
 
 /**

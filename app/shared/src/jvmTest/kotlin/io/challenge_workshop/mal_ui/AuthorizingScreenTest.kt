@@ -75,7 +75,7 @@ class AuthorizingScreenTest {
             assertEquals(pasted, actions.pastes.first())
             assertEquals(
                 listOf("completeSignIn", "cancelSignIn"),
-                actions.clicks().filterNot { it == "pastedRedirectChange" },
+                actions.calls.filterNot { it == "pastedRedirectChange" },
             )
         }
     }

@@ -3,7 +3,8 @@ package io.challenge_workshop.mal_ui.auth
 import androidx.compose.runtime.Immutable
 import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
 import io.challenge_workshop.mal_ui.animelist.AnimeListSortOrder
-import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
+import io.challenge_workshop.mal_ui.animelist.LayoutPreference
+import io.challenge_workshop.mal_ui.animelist.AnimeListRepository
 import io.challenge_workshop.mal_ui.animelist.WatchStatus
 import io.challenge_workshop.mal_ui.screen.ScreenState
 
@@ -19,8 +20,8 @@ import io.challenge_workshop.mal_ui.screen.ScreenState
  * They are [Immutable] and built **once**, with `remember`, in `App()`. Rebuilt per recomposition
  * they would be exactly the unstable argument described above, and the annotation would be a lie.
  *
- * Not a property of either ViewModel: [SignedInActions] spans both of them, and a record that one
- * ViewModel exposed would have to reach into the other.
+ * Not a property of the ViewModel: [SignedInActions] spans it, the Anime List and the Layout, and a
+ * record any one of them exposed would have to reach into the others.
  */
 @Immutable
 data class ScreenActions(
@@ -55,13 +56,14 @@ data class AuthorizingActions(
 /**
  * The signed-in screen, which **is** the Anime List.
  *
- * This record is the reason no ViewModel exposes an actions record of its own: Reload and Sign out
- * come from the Session, the Layout and the two query controls from the list, and the diagnostics
- * dialog from both.
+ * This record is the reason the ViewModel exposes no actions record of its own: Sign out and the
+ * diagnostics dialog come from the Session, Reload and the two query controls from the Anime List,
+ * and the Layout from its preference.
+ *
+ * There is no "load the first page": the Anime List asks for it itself as the Session starts.
  */
 @Immutable
 data class SignedInActions(
-    val onLoadFirstPage: () -> Unit,
     val onLoadMore: () -> Unit,
     val onRetry: () -> Unit,
     val onReload: () -> Unit,
@@ -87,7 +89,7 @@ data class DiagnosticsActions(
 )
 
 /**
- * Wires the two ViewModels to the three actions records, in one place so `App()` and the rendering
+ * Wires the ViewModel, the Anime List and the Layout to the three actions records, in one place so `App()` and the rendering
  * tests cannot drift about what a control does.
  *
  * Not a `@Composable` and not remembered here: the caller is what has to `remember` the result, since
@@ -98,7 +100,8 @@ data class DiagnosticsActions(
  */
 internal fun screenActions(
     viewModel: MalSessionViewModel,
-    animeList: AnimeListViewModel,
+    animeList: AnimeListRepository,
+    layout: LayoutPreference,
     channel: AuthRedirectChannel,
     openUri: (String) -> Unit,
 ): ScreenActions = ScreenActions(
@@ -114,13 +117,14 @@ internal fun screenActions(
         onCancelSignIn = viewModel::cancelSignIn,
     ),
     signedIn = SignedInActions(
-        onLoadFirstPage = animeList::loadFirstPage,
         onLoadMore = animeList::loadMore,
         onRetry = animeList::retry,
         onReload = animeList::reload,
         onSelectWatchStatus = animeList::setWatchStatus,
         onSelectSortOrder = animeList::setSortOrder,
-        onSelectLayout = animeList::setLayout,
+        // Straight to the preference, which switches inside the click and writes behind it: a Layout
+        // is a presentation choice, costs no request, and needs no coroutine of this caller's.
+        onSelectLayout = layout::choose,
         onSignOut = viewModel::signOut,
         diagnostics = DiagnosticsActions(
             onReloadDiagnostics = { viewModel.reloadDiagnostics() },

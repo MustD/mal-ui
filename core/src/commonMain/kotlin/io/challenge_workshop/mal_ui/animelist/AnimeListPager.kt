@@ -54,10 +54,13 @@ data class AnimeListState(
  * read, as [AnimeListState.exhausted].
  *
  * Every method suspends rather than launching into a scope of its own. A pager that owned a scope
- * would have to be closed, and its caller — a ViewModel that already has `viewModelScope` — would be
- * the one thing that must not forget to.
+ * would have to be closed, and its one caller — [AnimeListRepository], which already cancels a whole
+ * Session's worth of work at once — would be the one thing that must not forget to.
+ *
+ * `internal`: one pager is one Session's list, and only [AnimeListRepository] knows when a Session
+ * starts and ends.
  */
-class AnimeListPager(
+internal class AnimeListPager(
     private val client: MalAnimeListClient,
     private val pageSize: Int = MalAnimeListClient.DEFAULT_PAGE_SIZE,
     watchStatus: WatchStatus? = null,
@@ -85,16 +88,10 @@ class AnimeListPager(
     private var generation: Int = 0
 
     /**
-     * The first page, unless one has already landed or is already in flight.
-     *
-     * Safe to call from a `LaunchedEffect` that recomposition re-runs: the screen asking twice is
-     * ordinary, and a second request would be neither. A previous failure stops it too — that path
-     * is [retry], driven by the user, not by an effect that would re-fire the same failing request
-     * on every recomposition.
+     * The first page. Asked exactly once per pager, by [AnimeListRepository] as the Session starts, so
+     * there is nothing to guard: a failure from here on is [retry]'s, driven by a person.
      */
-    suspend fun loadFirstPage() {
-        val current = _state.value
-        if (current.loaded || current.loadingFirstPage || current.firstPageError != null) return
+    suspend fun start() {
         load()
     }
 

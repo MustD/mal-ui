@@ -241,10 +241,6 @@ fun SignedInScreen(
     val layout = state.layout
     val contentWidth = Modifier.widthIn(max = layout.contentMaxWidth()).fillMaxWidth()
 
-    // Not in the ViewModel's `init`: the pager must only ask MAL for a list once there is a
-    // signed-in screen to show one on. The pager itself ignores a repeat, so a recomposition
-    // costs nothing.
-    LaunchedEffect(Unit) { actions.onLoadFirstPage() }
     // Armed on `loaded`, not on "there are entries": a first page can come back empty and still
     // carry a `paging.next`, and a pager that is not exhausted with no way left to ask it for more
     // is a list that has silently stopped. Disarmed once exhausted, so the trigger costs nothing at

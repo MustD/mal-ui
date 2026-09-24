@@ -78,7 +78,7 @@ class SignedInTopBarTest {
             onNodeWithTag(SESSION_MENU_BUTTON_TAG).performClick()
             onNodeWithText("Sign out").performClick()
 
-            assertEquals(listOf("reload", "signOut"), actions.clicks())
+            assertEquals(listOf("reload", "signOut"), actions.calls)
         }
     }
 
@@ -192,7 +192,7 @@ class SignedInTopBarTest {
 
             assertEquals(
                 listOf("reloadDiagnostics", "refreshUser", "forceExpireAccessToken"),
-                actions.clicks(),
+                actions.calls,
             )
             onNodeWithText("deliberately invalidated", substring = true).assertIsDisplayed()
         }

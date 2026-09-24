@@ -13,13 +13,11 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.AnnotatedString
-import androidx.lifecycle.ViewModelStore
 import io.challenge_workshop.mal_ui.animelist.AiringStatus
 import io.challenge_workshop.mal_ui.animelist.AnimeListEntry
 import io.challenge_workshop.mal_ui.animelist.AnimeListLayout
 import io.challenge_workshop.mal_ui.animelist.AnimeListSortOrder
 import io.challenge_workshop.mal_ui.animelist.AnimeListState
-import io.challenge_workshop.mal_ui.animelist.AnimeListViewModel
 import io.challenge_workshop.mal_ui.animelist.WatchStatus
 import io.challenge_workshop.mal_ui.auth.AuthorizingActions
 import io.challenge_workshop.mal_ui.auth.DiagnosticsActions
@@ -161,7 +159,7 @@ internal const val TEST_AUTHORIZATION_URL: String =
 /**
  * A [ScreenActions] that writes down what it was asked to do.
  *
- * What a control *causes* is a ViewModel's or the pager's, and both are tested where they live. What
+ * What a control *causes* is the ViewModel's or the Anime List's, and both are tested where they live. What
  * is left for a rendering test is that the control the user can see is wired to the right one of
  * them — a Layout toggle bound to `onReload` still renders perfectly.
  */
@@ -184,7 +182,6 @@ internal class RecordedActions {
             onCancelSignIn = { calls += "cancelSignIn" },
         ),
         signedIn = SignedInActions(
-            onLoadFirstPage = { calls += "loadFirstPage" },
             onLoadMore = { calls += "loadMore" },
             onRetry = { calls += "retry" },
             onReload = { calls += "reload" },
@@ -199,12 +196,6 @@ internal class RecordedActions {
             ),
         ),
     )
-
-    /**
-     * Everything but the first page load, which every signed-in screen asks for on composition and
-     * which is therefore never the thing a click assertion is about.
-     */
-    fun clicks(): List<String> = calls.filterNot { it == "loadFirstPage" }
 }
 
 // --- The rendering harness, shared by the five per-screen tests --------------------------------
@@ -240,18 +231,6 @@ internal fun ComposeUiTest.openDiagnostics() {
     onNodeWithTag(SESSION_MENU_BUTTON_TAG).performClick()
     onNodeWithText("Session diagnostics").performClick()
     waitForIdle()
-}
-
-/**
- * Ends a hand-built ViewModel's `viewModelScope`, which is otherwise never ended.
- *
- * A ViewModel built by a test rather than by a `ViewModelStore` has nothing that will ever clear it,
- * so its scope outlives the test with a page request still in it — to land after the repository
- * underneath it has been closed and the Main dispatcher reset. Through a `ViewModelStore` because
- * `ViewModel.clear()` is `internal` and this is the public door to it.
- */
-internal fun clear(viewModel: AnimeListViewModel) {
-    ViewModelStore().apply { put("animeList", viewModel) }.clear()
 }
 
 /** Stands in for the desktop clipboard, which a unit test must not actually write to. */

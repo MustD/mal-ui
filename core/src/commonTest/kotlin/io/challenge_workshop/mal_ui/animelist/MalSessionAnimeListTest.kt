@@ -41,7 +41,7 @@ class MalSessionAnimeListTest {
         repository.restore()
         val pager = AnimeListPager(repository.animeListClient())
 
-        pager.loadFirstPage()
+        pager.start()
 
         assertEquals(3, pager.state.value.entries.size)
         assertNull(pager.state.value.firstPageError)
@@ -69,7 +69,7 @@ class MalSessionAnimeListTest {
         )
         repository.restore()
 
-        AnimeListPager(repository.animeListClient()).loadFirstPage()
+        AnimeListPager(repository.animeListClient()).start()
 
         assertEquals("/v2/users/@me/animelist", mal.animeListRequests.single().encodedPath)
         assertEquals("mal.test", mal.animeListRequests.single().host)
