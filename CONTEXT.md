@@ -63,7 +63,9 @@ failed. Carried so the UI can explain itself rather than showing a bare "signed 
 
 **Anime List**:
 The user's own collection on MyAnimeList — every anime they have added, whatever they did with it. MAL's own word for
-it, and the thing this app's signed-in screen shows. _Avoid_: Library, collection, watchlist (a watchlist is at most the
+it, and the thing this app's signed-in screen shows. One per Session: it is fetched when a Session starts and
+discarded when it ends, filter and Sort Order included — the next Session opens on the defaults, whoever signs in.
+_Avoid_: Library, collection, watchlist (a watchlist is at most the
 Plan to Watch slice of one)
 
 **List Entry**:
